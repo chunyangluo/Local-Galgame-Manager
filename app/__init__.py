@@ -1,0 +1,2 @@
+"""Local Galgame Manager package."""
+
