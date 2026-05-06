@@ -38,6 +38,10 @@ class EditGameDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("编辑游戏信息")
         self.resize(650, 150)
+        self._default_browse_dir = game.root_dir
+        launch_parent = Path(game.launch_exe).parent
+        if launch_parent.exists():
+            self._default_browse_dir = str(launch_parent)
 
         layout = QFormLayout(self)
 
@@ -61,12 +65,79 @@ class EditGameDialog(QDialog):
         layout.addWidget(buttons)
 
     def _browse_exe(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "选择启动程序", "", "Executable (*.exe)")
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择启动程序",
+            self._default_browse_dir,
+            "Executable (*.exe)",
+        )
         if path:
             self.launch_input.setText(path)
+            parent = str(Path(path).parent)
+            self._default_browse_dir = parent
 
     def values(self) -> tuple[str, str]:
         return self.name_input.text().strip(), self.launch_input.text().strip()
+
+
+class ScanRootsDialog(QDialog):
+    def __init__(self, db: Database, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.db = db
+        self.setWindowTitle("扫描路径管理")
+        self.resize(760, 420)
+
+        root = QVBoxLayout(self)
+        self.list_widget = QListWidget()
+        root.addWidget(self.list_widget, 1)
+
+        buttons = QHBoxLayout()
+        self.btn_add = QPushButton("添加路径")
+        self.btn_add.clicked.connect(self._add_root)
+        buttons.addWidget(self.btn_add)
+
+        self.btn_remove = QPushButton("删除选中")
+        self.btn_remove.clicked.connect(self._remove_selected)
+        buttons.addWidget(self.btn_remove)
+
+        self.btn_clear = QPushButton("清空全部")
+        self.btn_clear.clicked.connect(self._clear_all)
+        buttons.addWidget(self.btn_clear)
+        buttons.addStretch(1)
+        root.addLayout(buttons)
+
+        close_buttons = QDialogButtonBox(QDialogButtonBox.Close)
+        close_buttons.rejected.connect(self.reject)
+        close_buttons.accepted.connect(self.accept)
+        root.addWidget(close_buttons)
+
+        self._refresh()
+
+    def _refresh(self) -> None:
+        self.list_widget.clear()
+        for path in self.db.list_scan_roots():
+            self.list_widget.addItem(path)
+
+    def _add_root(self) -> None:
+        directory = QFileDialog.getExistingDirectory(self, "选择游戏根目录")
+        if not directory:
+            return
+        self.db.add_scan_root(directory)
+        self._refresh()
+
+    def _remove_selected(self) -> None:
+        item = self.list_widget.currentItem()
+        if item is None:
+            return
+        self.db.remove_scan_root(item.text())
+        self._refresh()
+
+    def _clear_all(self) -> None:
+        if QMessageBox.question(self, "确认", "确定清空所有扫描路径吗？") != QMessageBox.Yes:
+            return
+        for path in self.db.list_scan_roots():
+            self.db.remove_scan_root(path)
+        self._refresh()
 
 
 class MainWindow(QMainWindow):
@@ -112,6 +183,10 @@ class MainWindow(QMainWindow):
         self.btn_add_root = QPushButton("添加扫描目录")
         self.btn_add_root.clicked.connect(self._add_scan_root)
         toolbar.addWidget(self.btn_add_root)
+
+        self.btn_manage_roots = QPushButton("管理扫描目录")
+        self.btn_manage_roots.clicked.connect(self._manage_scan_roots)
+        toolbar.addWidget(self.btn_manage_roots)
 
         self.btn_scan = QPushButton("全量扫描")
         self.btn_scan.clicked.connect(self._scan_all)
@@ -221,6 +296,17 @@ class MainWindow(QMainWindow):
             return
         self.db.add_scan_root(directory)
         self.status.setText(f"已添加扫描目录: {directory}")
+
+    def _manage_scan_roots(self) -> None:
+        dialog = ScanRootsDialog(self.db, self)
+        dialog.exec()
+        roots_count = len(self.db.list_scan_roots())
+        if roots_count == 0:
+            removed = self.db.clear_all_games()
+            self.refresh_games()
+            self.status.setText(f"扫描目录已清空，同时清理了 {removed} 条游戏数据")
+            return
+        self.status.setText(f"当前扫描目录数量: {roots_count}")
 
     def _scan_all(self) -> None:
         roots = self.db.list_scan_roots()

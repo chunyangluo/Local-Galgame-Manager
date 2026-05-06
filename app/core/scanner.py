@@ -108,6 +108,8 @@ class GameScanner:
         for first_dir in first_level_dirs:
             if self._should_skip_directory(first_dir):
                 continue
+            if self._is_dev_project_directory(first_dir):
+                continue
             if self._is_non_game_dir_name(first_dir.name) and not self._is_bridge_dir_name(first_dir.name):
                 continue
             grouped_count = self._extract_group_count(first_dir.name)
@@ -117,6 +119,8 @@ class GameScanner:
                     sub_games = sub_games[:grouped_count]
                 for sub in sub_games:
                     if self._should_skip_directory(sub):
+                        continue
+                    if self._is_dev_project_directory(sub):
                         continue
                     if self._is_non_game_dir_name(sub.name) and not self._is_bridge_dir_name(sub.name):
                         continue
@@ -146,7 +150,10 @@ class GameScanner:
             [
                 p
                 for p in first_dir.iterdir()
-                if p.is_dir() and not self._should_skip_directory(p) and not self._is_non_game_dir_name(p.name)
+                if p.is_dir()
+                and not self._should_skip_directory(p)
+                and not self._is_dev_project_directory(p)
+                and not self._is_non_game_dir_name(p.name)
             ]
         )
         if len(children) < 2:
@@ -236,6 +243,8 @@ class GameScanner:
             if depth > max_depth:
                 continue
             if current != base_dir and self._should_skip_directory(current):
+                continue
+            if self._is_dev_project_directory(current):
                 continue
 
             candidate = self._pick_main_exe(current)
@@ -327,3 +336,17 @@ class GameScanner:
                 return name
             cursor = parent
         return directory.parent.name if directory.parent else directory.name
+
+    def _is_dev_project_directory(self, directory: Path) -> bool:
+        """
+        Skip local source/build folders to avoid importing this manager itself
+        (or other software projects) as a game.
+        """
+        try:
+            has_git = (directory / ".git").exists()
+            has_python_project = (directory / "requirements.txt").exists() and (directory / "app").is_dir()
+            has_entry = (directory / "app" / "main.py").exists()
+            has_build_outputs = (directory / "dist").is_dir() and (directory / "build").is_dir()
+            return has_git or (has_python_project and has_entry) or (has_python_project and has_build_outputs)
+        except OSError:
+            return False

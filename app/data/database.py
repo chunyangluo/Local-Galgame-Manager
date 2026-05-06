@@ -327,3 +327,10 @@ class Database:
         self.conn.execute(f"DELETE FROM games WHERE id IN ({placeholders})", to_delete_ids)
         self.conn.commit()
         return len(to_delete_ids)
+
+    def clear_all_games(self) -> int:
+        row = self.conn.execute("SELECT COUNT(*) AS cnt FROM games").fetchone()
+        count = int(row["cnt"]) if row else 0
+        self.conn.execute("DELETE FROM games")
+        self.conn.commit()
+        return count

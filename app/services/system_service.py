@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import winreg
 from pathlib import Path
@@ -38,15 +39,48 @@ class SystemService:
         self._write_config(state)
 
     def create_desktop_shortcut(self, name: str, target_path: str) -> Path:
+        target = Path(target_path)
+        if not target.exists():
+            raise FileNotFoundError(f"Launch target not found: {target_path}")
         desktop = Path(os.path.expanduser("~")) / "Desktop"
         desktop.mkdir(parents=True, exist_ok=True)
-        shortcut = desktop / f"{name}.url"
-        normalized = target_path.replace("\\", "/")
-        shortcut.write_text(
-            f"[InternetShortcut]\nURL=file:///{normalized}\n",
-            encoding="utf-8",
+        safe_name = self._sanitize_filename(name)
+        shortcut = desktop / f"{safe_name}.lnk"
+        try:
+            self._create_windows_lnk(shortcut, target)
+            return shortcut
+        except Exception:
+            # Fallback for restricted environments where COM shortcut creation
+            # may fail. URL shortcuts still allow launching target files.
+            fallback = desktop / f"{safe_name}.url"
+            normalized = str(target).replace("\\", "/")
+            fallback.write_text(
+                f"[InternetShortcut]\nURL=file:///{normalized}\n",
+                encoding="utf-8",
+            )
+            return fallback
+
+    def _create_windows_lnk(self, shortcut_path: Path, target: Path) -> None:
+        working_dir = target.parent
+        script = f"""
+$ws = New-Object -ComObject WScript.Shell
+$s = $ws.CreateShortcut('{str(shortcut_path)}')
+$s.TargetPath = '{str(target)}'
+$s.WorkingDirectory = '{str(working_dir)}'
+$s.IconLocation = '{str(target)},0'
+$s.Save()
+"""
+        subprocess.run(
+            ["powershell", "-NoProfile", "-Command", script],
+            check=True,
+            capture_output=True,
+            text=True,
         )
-        return shortcut
+
+    def _sanitize_filename(self, value: str) -> str:
+        invalid = '<>:"/\\|?*'
+        result = "".join("_" if ch in invalid else ch for ch in value).strip()
+        return result or "GameShortcut"
 
     def _read_config(self) -> dict:
         if not self.config_path.exists():
