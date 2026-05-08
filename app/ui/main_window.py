@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import requests
 from PySide6.QtCore import QObject, QPoint, QRunnable, QThread, QThreadPool, QTimer, QSize, Qt, Signal
 from PySide6.QtGui import (
     QAction,
@@ -294,18 +293,12 @@ class GameCardWidget(QWidget):
                     scaled = self._scale_and_center_crop(pix, self.cover.size())
                     self.cover.setPixmap(self._with_bottom_gradient(scaled))
                     return
+        # IMPORTANT: never request network images on UI thread.
+        # VNDB images should be pre-cached by worker threads during import.
+        # If cache is missing, keep placeholder to avoid UI freeze.
         if image_url and image_url.startswith(("http://", "https://")):
-            try:
-                response = requests.get(image_url, timeout=(2, 4))
-                response.raise_for_status()
-                pix = QPixmap()
-                if pix.loadFromData(response.content):
-                    scaled = self._scale_and_center_crop(pix, self.cover.size())
-                    self.cover.setPixmap(self._with_bottom_gradient(scaled))
-                    return
-            except Exception:
-                self.cover.setPixmap(self._build_placeholder_cover("加载失败"))
-                return
+            self.cover.setPixmap(self._build_placeholder_cover("等待缓存"))
+            return
         self.cover.setPixmap(self._build_placeholder_cover("NO COVER"))
 
     def _scale_and_center_crop(self, source: QPixmap, target_size: QSize) -> QPixmap:
@@ -653,6 +646,12 @@ class MainWindow(QMainWindow):
         self._scan_worker: ScanWorker | None = None
         self._scan_running = False
         self._vndb_worker: VndbImportWorker | None = None
+        self._render_timer = QTimer(self)
+        self._render_timer.setSingleShot(True)
+        self._render_timer.timeout.connect(self._render_next_batch)
+        self._render_batch_size = 10
+        self._render_index = 0
+        self._render_total = 0
 
         self._build_ui()
         self._setup_tray()
@@ -1094,8 +1093,29 @@ class MainWindow(QMainWindow):
             query=self.search_input.text(),
             only_favorite=self.favorite_only.isChecked(),
         )
+        self._start_incremental_render()
+        self._update_empty_state()
+        self._update_action_state()
+
+    def _start_incremental_render(self) -> None:
+        if self._render_timer.isActive():
+            self._render_timer.stop()
         self.games_list.clear()
-        for game in self.filtered_games:
+        self._render_index = 0
+        self._render_total = len(self.filtered_games)
+        if self._render_total == 0:
+            self.status.setText(f"共 0 / {len(self.games_cache)} 个游戏")
+            return
+        self.status.setText(f"正在渲染 0/{self._render_total} ...")
+        self._render_next_batch()
+
+    def _render_next_batch(self) -> None:
+        if self._render_index >= self._render_total:
+            self.status.setText(f"共 {self._render_total} / {len(self.games_cache)} 个游戏")
+            return
+        end = min(self._render_index + self._render_batch_size, self._render_total)
+        for idx in range(self._render_index, end):
+            game = self.filtered_games[idx]
             item = QListWidgetItem()
             if self._is_grid_view:
                 item.setSizeHint(QSize(340, 346))
@@ -1103,11 +1123,13 @@ class MainWindow(QMainWindow):
                 item.setSizeHint(QSize(300, 320))
             item.setData(Qt.UserRole, game.id)
             self.games_list.addItem(item)
-            card = GameCardWidget(game)
-            self.games_list.setItemWidget(item, card)
-        self.status.setText(f"共 {len(self.filtered_games)} / {len(self.games_cache)} 个游戏")
-        self._update_empty_state()
-        self._update_action_state()
+            self.games_list.setItemWidget(item, GameCardWidget(game))
+        self._render_index = end
+        if self._render_index < self._render_total:
+            self.status.setText(f"正在渲染 {self._render_index}/{self._render_total} ...")
+            self._render_timer.start(0)
+        else:
+            self.status.setText(f"共 {self._render_total} / {len(self.games_cache)} 个游戏")
 
     def _selected_game(self) -> GameRecord | None:
         index = self.games_list.currentRow()

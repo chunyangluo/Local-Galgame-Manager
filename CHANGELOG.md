@@ -1,5 +1,10 @@
 # Changelog
 
+## v2.0.1
+- Fix major UI freeze risk by removing synchronous network cover fetch from the UI thread.
+- Add incremental game-card rendering in batches to keep the window responsive on large libraries.
+- Improve cover fallback state when VNDB image cache is not ready (`等待缓存` placeholder).
+
 ## v2.0.0
 - Switch to VNDB-first metadata import workflow with no-auth public API access.
 - Add 6-thread VNDB batch import in UI with progress, cancellation, and result summary dialog.
