@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QApplication
 from PySide6.QtWidgets import QMessageBox
 
 from app.plugins.manager import PluginManager
+from app.services.app_data_dir import get_app_data_dir
 from app.ui.main_window import MainWindow
 
 
@@ -25,8 +26,7 @@ def _write_startup_log(data_dir: Path, title: str, detail: str) -> None:
 
 
 def main() -> int:
-    data_dir = Path.cwd() / "data"
-    data_dir.mkdir(parents=True, exist_ok=True)
+    data_dir = get_app_data_dir()
     app = QApplication(sys.argv)
 
     try:
@@ -40,7 +40,7 @@ def main() -> int:
         QMessageBox.critical(
             None,
             "Local Galgame Manager 启动失败",
-            "程序启动异常，已写入日志：data/startup.log",
+            f"程序启动异常，已写入日志：{data_dir / 'startup.log'}",
         )
         return 1
 

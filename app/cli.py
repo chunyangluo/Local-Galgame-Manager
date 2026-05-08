@@ -9,6 +9,7 @@ from app.core.cover_manager import CoverManager
 from app.core.scanner import GameScanner
 from app.data.database import Database, VndbImportRow
 from app.plugins.manager import PluginManager
+from app.services.app_data_dir import get_app_data_dir
 from app.services.vndb_service import VndbOutcome, VndbService
 
 
@@ -52,7 +53,7 @@ def run() -> int:
     parser = build_parser()
     args = parser.parse_args()
 
-    data_dir = Path.cwd() / "data"
+    data_dir = get_app_data_dir()
     scanner = GameScanner()
     db = Database(data_dir)
     db.ensure_default_user()

@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.0.3
+- Fix persistent data reset issue by moving runtime data directory from `Path.cwd()/data` to `%LOCALAPPDATA%/LocalGalgameManager/data`.
+- Unify data-dir resolution for both GUI (`app.main`) and CLI (`app.cli`) to ensure consistent library/config loading across launch methods.
+- Add best-effort legacy data migration on startup (copy missing entries only, no overwrite) from old working-directory/executable-adjacent `data` folders.
+- Improve startup crash dialog to show the actual absolute path of `startup.log`.
+
 ## v2.0.2
 - Preserve local display names during VNDB imports (avoid forced English title overwrite).
 - Stop automatic deletion of unmatched games during scan/VNDB workflow to prevent unexpected library shrink.
