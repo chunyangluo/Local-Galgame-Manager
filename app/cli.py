@@ -154,7 +154,8 @@ def _run_vndb_import(
             cover_manager.cache_vndb_image(rec.image_url, rec.vndb_id) if rec.image_url else None
         )
         row = VndbImportRow(
-            name=rec.title or name,
+            # Keep local display name stable; VNDB titles go to metadata columns.
+            name=name,
             root_dir=root_dir,
             launch_exe=launch_exe,
             vndb_id=rec.vndb_id,

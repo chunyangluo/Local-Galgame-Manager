@@ -1,5 +1,11 @@
 # Changelog
 
+## v2.0.2
+- Preserve local display names during VNDB imports (avoid forced English title overwrite).
+- Stop automatic deletion of unmatched games during scan/VNDB workflow to prevent unexpected library shrink.
+- Add `app.feature_selftest` module for one-command functional verification (DB, scanner, plugin, cover, VNDB parse, optional network/UI checks).
+- Document self-test usage in README for faster release validation.
+
 ## v2.0.1
 - Fix major UI freeze risk by removing synchronous network cover fetch from the UI thread.
 - Add incremental game-card rendering in batches to keep the window responsive on large libraries.

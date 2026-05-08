@@ -83,6 +83,21 @@ python -m app.cli --root "E:\private\galgame" --vndb-import --threads 6 --import
 
 更多操作说明请参考：`docs/USER_GUIDE.md`
 
+## 功能自检模块
+
+快速检查数据库、扫描、插件、封面处理、VNDB 解析等核心能力：
+
+```bash
+python -m app.feature_selftest
+```
+
+可选项：
+
+```bash
+# 增加 VNDB 联网检查 + UI 初始化冒烟检查，并输出 JSON 报告
+python -m app.feature_selftest --with-network --with-ui --json
+```
+
 ## 打包
 
 ```powershell

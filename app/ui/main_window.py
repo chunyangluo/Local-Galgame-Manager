@@ -439,7 +439,8 @@ class _VndbTask(QRunnable):
         if outcome.success and outcome.record is not None:
             rec = outcome.record
             row = VndbImportRow(
-                name=rec.title or self.name,
+                # Keep local display name; VNDB titles are stored separately.
+                name=self.name,
                 root_dir=self.root_dir,
                 launch_exe=self.launch_exe,
                 vndb_id=rec.vndb_id,
@@ -909,9 +910,8 @@ class MainWindow(QMainWindow):
         if not rows:
             self._scan_running = False
             self._end_scan_ui()
-            self.db.delete_games_not_in_scan(roots, set())
             self.refresh_games()
-            self.status.setText("扫描完成，但未识别到可导入游戏")
+            self.status.setText("扫描完成，但未识别到可导入游戏（已保留原有库数据）")
             return
         valid_dirs = {row[1] for row in rows}
         self.status.setText(f"扫描完成，开始 VNDB 导入（共 {len(rows)} 项）...")
@@ -1012,8 +1012,9 @@ class MainWindow(QMainWindow):
         self._end_scan_ui()
         if rows:
             self.db.upsert_games_batch(rows)
-        if roots is not None and valid_dirs is not None:
-            self.db.delete_games_not_in_scan(roots, valid_dirs)
+        # Do not auto-delete unmatched rows during VNDB workflow.
+        # Scanner heuristics can miss titles; deleting here causes unexpected
+        # library shrink (e.g., 40+ -> 20).
         self.refresh_games()
         success = len(rows)
         self.status.setText(f"VNDB 导入完成：成功 {success} / {total}")
