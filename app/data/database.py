@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import sqlite3
+import json
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -19,6 +20,36 @@ class GameRecord:
     last_played_at: str | None
     play_count: int
     total_play_seconds: int
+    vndb_id: str | None = None
+    title_original: str | None = None
+    title_localized: str | None = None
+    description: str | None = None
+    rating: float | None = None
+    platforms: str | None = None
+    languages: str | None = None
+    image_url: str | None = None
+    screenshots_json: str | None = None
+    source: str | None = None
+
+
+@dataclass
+class VndbImportRow:
+    """Container for a single VNDB import write."""
+
+    name: str
+    root_dir: str
+    launch_exe: str
+    vndb_id: str | None
+    title_original: str | None
+    title_localized: str | None
+    description: str | None
+    rating: float | None
+    platforms: str | None
+    languages: str | None
+    image_url: str | None
+    screenshots_json: str | None
+    cover_path: str | None
+    source: str = "vndb"
 
 
 class Database:
@@ -115,6 +146,7 @@ class Database:
             "INSERT OR IGNORE INTO settings (id, updated_at) VALUES (1, ?)", (now,)
         )
         self._ensure_games_columns()
+        self._ensure_settings_columns()
         self.conn.commit()
 
     def _ensure_games_columns(self) -> None:
@@ -126,6 +158,41 @@ class Database:
             self.conn.execute("ALTER TABLE games ADD COLUMN custom_name TEXT")
         if "custom_launch_exe" not in cols:
             self.conn.execute("ALTER TABLE games ADD COLUMN custom_launch_exe TEXT")
+        vndb_columns = {
+            "vndb_id": "TEXT",
+            "title_original": "TEXT",
+            "title_localized": "TEXT",
+            "description": "TEXT",
+            "rating": "REAL",
+            "platforms": "TEXT",
+            "languages": "TEXT",
+            "image_url": "TEXT",
+            "screenshots_json": "TEXT",
+            "source": "TEXT",
+        }
+        for col_name, col_type in vndb_columns.items():
+            if col_name not in cols:
+                self.conn.execute(
+                    f"ALTER TABLE games ADD COLUMN {col_name} {col_type}"
+                )
+        # Index on vndb_id for quick idempotent lookups.
+        self.conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_games_vndb_id ON games(vndb_id)"
+        )
+
+    def _ensure_settings_columns(self) -> None:
+        cols = {
+            str(row["name"])
+            for row in self.conn.execute("PRAGMA table_info(settings)").fetchall()
+        }
+        if "plugin_disabled_names" not in cols:
+            self.conn.execute(
+                "ALTER TABLE settings ADD COLUMN plugin_disabled_names TEXT DEFAULT '[]'"
+            )
+        if "cover_fetch_mode" not in cols:
+            self.conn.execute(
+                "ALTER TABLE settings ADD COLUMN cover_fetch_mode TEXT DEFAULT 'local_prefer'"
+            )
 
     def ensure_default_user(self) -> int:
         row = self.conn.execute("SELECT current_user_id FROM settings WHERE id = 1").fetchone()
@@ -168,6 +235,52 @@ class Database:
         )
         self.conn.commit()
 
+    def get_disabled_plugins(self) -> list[str]:
+        row = self.conn.execute(
+            "SELECT plugin_disabled_names FROM settings WHERE id = 1"
+        ).fetchone()
+        if row is None:
+            return []
+        raw = row["plugin_disabled_names"]
+        if raw is None:
+            return []
+        try:
+            value = json.loads(str(raw))
+        except json.JSONDecodeError:
+            return []
+        if not isinstance(value, list):
+            return []
+        return [str(item) for item in value if str(item).strip()]
+
+    def set_disabled_plugins(self, names: list[str]) -> None:
+        normalized = sorted({name.strip() for name in names if name.strip()})
+        self.conn.execute(
+            "UPDATE settings SET plugin_disabled_names = ?, updated_at = ? WHERE id = 1",
+            (json.dumps(normalized, ensure_ascii=False), datetime.utcnow().isoformat()),
+        )
+        self.conn.commit()
+
+    def get_cover_fetch_mode(self) -> str:
+        row = self.conn.execute(
+            "SELECT cover_fetch_mode FROM settings WHERE id = 1"
+        ).fetchone()
+        if row is None:
+            return "local_prefer"
+        mode = str(row["cover_fetch_mode"] or "local_prefer").strip().lower()
+        if mode not in {"local_only", "local_prefer", "online_prefer"}:
+            return "local_prefer"
+        return mode
+
+    def set_cover_fetch_mode(self, mode: str) -> None:
+        normalized = mode.strip().lower()
+        if normalized not in {"local_only", "local_prefer", "online_prefer"}:
+            normalized = "local_prefer"
+        self.conn.execute(
+            "UPDATE settings SET cover_fetch_mode = ?, updated_at = ? WHERE id = 1",
+            (normalized, datetime.utcnow().isoformat()),
+        )
+        self.conn.commit()
+
     def add_scan_root(self, path: str) -> None:
         self.conn.execute(
             "INSERT OR IGNORE INTO scan_roots (path, created_at) VALUES (?, ?)",
@@ -199,6 +312,114 @@ class Database:
         )
         self.conn.commit()
 
+    def upsert_games_batch(self, rows: list["VndbImportRow"]) -> int:
+        """Bulk-write VNDB-enriched rows in a single transaction.
+
+        Returns the number of records written.
+        """
+        if not rows:
+            return 0
+        now = datetime.utcnow().isoformat()
+        payload = [
+            (
+                row.name,
+                row.root_dir,
+                row.launch_exe,
+                row.cover_path,
+                row.vndb_id,
+                row.title_original,
+                row.title_localized,
+                row.description,
+                row.rating,
+                row.platforms,
+                row.languages,
+                row.image_url,
+                row.screenshots_json,
+                row.source or "vndb",
+                now,
+                now,
+            )
+            for row in rows
+        ]
+        with self.conn:
+            self.conn.executemany(
+                """
+                INSERT INTO games (
+                    name, root_dir, launch_exe, cover_path,
+                    vndb_id, title_original, title_localized, description,
+                    rating, platforms, languages, image_url, screenshots_json,
+                    source, created_at, updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(root_dir) DO UPDATE SET
+                    name = excluded.name,
+                    launch_exe = excluded.launch_exe,
+                    cover_path = COALESCE(excluded.cover_path, games.cover_path),
+                    vndb_id = COALESCE(excluded.vndb_id, games.vndb_id),
+                    title_original = COALESCE(excluded.title_original, games.title_original),
+                    title_localized = COALESCE(excluded.title_localized, games.title_localized),
+                    description = COALESCE(excluded.description, games.description),
+                    rating = COALESCE(excluded.rating, games.rating),
+                    platforms = COALESCE(excluded.platforms, games.platforms),
+                    languages = COALESCE(excluded.languages, games.languages),
+                    image_url = COALESCE(excluded.image_url, games.image_url),
+                    screenshots_json = COALESCE(excluded.screenshots_json, games.screenshots_json),
+                    source = excluded.source,
+                    updated_at = excluded.updated_at
+                """,
+                payload,
+            )
+        return len(payload)
+
+    def find_game_by_root(self, root_dir: str) -> GameRecord | None:
+        row = self.conn.execute(
+            """
+            SELECT
+                g.id,
+                COALESCE(NULLIF(g.custom_name, ''), g.name) AS name,
+                g.root_dir,
+                COALESCE(NULLIF(g.custom_launch_exe, ''), g.launch_exe) AS launch_exe,
+                g.cover_path,
+                g.vndb_id,
+                g.title_original,
+                g.title_localized,
+                g.description,
+                g.rating,
+                g.platforms,
+                g.languages,
+                g.image_url,
+                g.screenshots_json,
+                g.source
+            FROM games g
+            WHERE g.root_dir = ?
+            """,
+            (root_dir,),
+        ).fetchone()
+        if row is None:
+            return None
+        return GameRecord(
+            id=int(row["id"]),
+            name=str(row["name"]),
+            root_dir=str(row["root_dir"]),
+            launch_exe=str(row["launch_exe"]),
+            cover_path=row["cover_path"],
+            favorite=False,
+            categories="",
+            last_played_at=None,
+            play_count=0,
+            total_play_seconds=0,
+            vndb_id=row["vndb_id"],
+            title_original=row["title_original"],
+            title_localized=row["title_localized"],
+            description=row["description"],
+            rating=float(row["rating"]) if row["rating"] is not None else None,
+            platforms=row["platforms"],
+            languages=row["languages"],
+            image_url=row["image_url"],
+            screenshots_json=row["screenshots_json"],
+            source=row["source"],
+        )
+
     def update_game_identity(self, game_id: int, name: str, launch_exe: str) -> None:
         now = datetime.utcnow().isoformat()
         self.conn.execute(
@@ -220,6 +441,16 @@ class Database:
                 g.root_dir,
                 COALESCE(NULLIF(g.custom_launch_exe, ''), g.launch_exe) AS launch_exe,
                 g.cover_path,
+                g.vndb_id,
+                g.title_original,
+                g.title_localized,
+                g.description,
+                g.rating,
+                g.platforms,
+                g.languages,
+                g.image_url,
+                g.screenshots_json,
+                g.source,
                 CASE WHEN f.game_id IS NULL THEN 0 ELSE 1 END AS favorite,
                 COALESCE(GROUP_CONCAT(c.name, ','), '') AS categories,
                 MAX(p.started_at) AS last_played_at,
@@ -247,6 +478,16 @@ class Database:
                 last_played_at=r["last_played_at"],
                 play_count=int(r["play_count"]),
                 total_play_seconds=int(r["total_play_seconds"]),
+                vndb_id=r["vndb_id"],
+                title_original=r["title_original"],
+                title_localized=r["title_localized"],
+                description=r["description"],
+                rating=float(r["rating"]) if r["rating"] is not None else None,
+                platforms=r["platforms"],
+                languages=r["languages"],
+                image_url=r["image_url"],
+                screenshots_json=r["screenshots_json"],
+                source=r["source"],
             )
             for r in rows
         ]

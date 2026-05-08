@@ -46,6 +46,18 @@ SKIP_DIRECTORY_KEYWORDS = (
     "patch",
     "sdk",
 )
+SKIP_DIRECTORY_NAMES = {
+    "build",
+    "dist",
+    ".git",
+    ".idea",
+    ".vscode",
+    "__pycache__",
+    ".pytest_cache",
+    "node_modules",
+    "venv",
+    ".venv",
+}
 
 NON_GAME_DIR_NAME_KEYWORDS = (
     "汉化补丁",
@@ -205,6 +217,8 @@ class GameScanner:
 
     def _should_skip_directory(self, directory: Path) -> bool:
         lower_path = str(directory).lower()
+        if directory.name.strip().lower() in SKIP_DIRECTORY_NAMES:
+            return True
         return any(token in lower_path for token in SKIP_DIRECTORY_KEYWORDS)
 
     def _normalize_name(self, value: str) -> str:
