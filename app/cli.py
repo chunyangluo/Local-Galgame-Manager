@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import argparse
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import json
+import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 from app.core.cover_manager import CoverManager
 from app.core.scanner import GameScanner
 from app.data.database import Database, VndbImportRow
+from app.logging_setup import setup_logging
 from app.plugins.manager import PluginManager
 from app.services.app_data_dir import get_app_data_dir
 from app.services.vndb_service import VndbOutcome, VndbService
@@ -54,6 +56,9 @@ def run() -> int:
     args = parser.parse_args()
 
     data_dir = get_app_data_dir()
+    setup_logging(data_dir=data_dir)
+    log = logging.getLogger(__name__)
+    log.info("CLI scan roots=%s import_db=%s vndb_import=%s", args.root, args.import_db, args.vndb_import)
     scanner = GameScanner()
     db = Database(data_dir)
     db.ensure_default_user()
@@ -125,6 +130,7 @@ def run() -> int:
     if args.output:
         Path(args.output).write_text(output_text + "\n", encoding="utf-8")
         print(f"Saved output to: {args.output}")
+        log.info("CLI wrote output file=%s", args.output)
     else:
         print(output_text)
 
@@ -133,9 +139,12 @@ def run() -> int:
             print(
                 f"VNDB import summary: total={summary['total']}, success={summary['success']}, failed={summary['failed']}"
             )
+            log.info("CLI VNDB import summary %s", summary)
         else:
             print(f"Imported {len(all_results)} records into database.")
+            log.info("CLI imported %s records", len(all_results))
 
+    log.info("CLI finished ok")
     return 0
 
 
@@ -151,8 +160,10 @@ def _run_vndb_import(
         if not outcome.success or outcome.record is None:
             return None, outcome
         rec = outcome.record
-        cover_path = (
-            cover_manager.cache_vndb_image(rec.image_url, rec.vndb_id) if rec.image_url else None
+        cover_path = cover_manager.cache_cover_with_fallback(
+            image_url=rec.image_url,
+            cache_key=rec.vndb_id,
+            game_name=name,
         )
         row = VndbImportRow(
             # Keep local display name stable; VNDB titles go to metadata columns.

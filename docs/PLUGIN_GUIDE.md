@@ -51,3 +51,12 @@ def register():
 - 勾选表示启用，取消勾选表示禁用
 - 配置会持久化保存到本地数据库，重启后仍生效
 
+## Locale Emulator（LE）转区启动（非 Python 扫描插件）
+
+与上述 `data/plugins/*.py` 扫描插件不同，**Locale Emulator** 是独立安装的 Windows 工具，用于以日文区域等环境启动游戏。
+
+- 从 [Locale Emulator Releases](https://github.com/xupefei/Locale-Emulator/releases) 下载并安装（上游仓库已归档，发行版仍可用）。
+- 在本程序 **「更多 → Locale Emulator (LE)…」** 中选择安装目录下的 **`LEProc.exe`** 并保存。
+- 配置完成后，游戏列表右键菜单、游戏详情、游玩历史窗口中会出现 **LE 转区启动**（或 **LE** 按钮）。
+- 启动方式：本程序调用 `LEProc.exe <游戏 exe 绝对路径>`，由 LE 按自身规则选择配置文件（与官方命令行一致）。
+

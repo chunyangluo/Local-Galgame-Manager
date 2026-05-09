@@ -33,6 +33,30 @@ class GameRecord:
 
 
 @dataclass
+class PlayRecordEntry:
+    """Single play session row for a user + game."""
+
+    id: int
+    started_at: str
+    ended_at: str | None
+    duration_seconds: int
+
+
+@dataclass
+class PlayHistoryRow:
+    """One play session joined with display name and cover (for global history UI)."""
+
+    record_id: int
+    game_id: int
+    game_name: str
+    cover_path: str | None
+    image_url: str | None
+    started_at: str
+    ended_at: str | None
+    duration_seconds: int
+
+
+@dataclass
 class VndbImportRow:
     """Container for a single VNDB import write."""
 
@@ -91,6 +115,7 @@ class Database:
                 launch_exe TEXT NOT NULL,
                 custom_name TEXT,
                 custom_launch_exe TEXT,
+                custom_cover_path TEXT,
                 cover_path TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
@@ -158,6 +183,8 @@ class Database:
             self.conn.execute("ALTER TABLE games ADD COLUMN custom_name TEXT")
         if "custom_launch_exe" not in cols:
             self.conn.execute("ALTER TABLE games ADD COLUMN custom_launch_exe TEXT")
+        if "custom_cover_path" not in cols:
+            self.conn.execute("ALTER TABLE games ADD COLUMN custom_cover_path TEXT")
         vndb_columns = {
             "vndb_id": "TEXT",
             "title_original": "TEXT",
@@ -175,10 +202,41 @@ class Database:
                 self.conn.execute(
                     f"ALTER TABLE games ADD COLUMN {col_name} {col_type}"
                 )
+        self._promote_legacy_custom_covers()
         # Index on vndb_id for quick idempotent lookups.
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_games_vndb_id ON games(vndb_id)"
         )
+
+    def _promote_legacy_custom_covers(self) -> None:
+        """Promote old user-imported covers to custom override field.
+
+        Older versions stored manually imported covers directly in `cover_path`
+        (usually as `<covers>/<game_id>.<ext>`), which could be overwritten by
+        scan/VNDB updates. Promote those rows once so manual covers keep highest
+        priority permanently.
+        """
+        rows = self.conn.execute(
+            """
+            SELECT id, cover_path
+            FROM games
+            WHERE (custom_cover_path IS NULL OR custom_cover_path = '')
+              AND cover_path IS NOT NULL
+              AND cover_path != ''
+            """
+        ).fetchall()
+        updates: list[tuple[str, int]] = []
+        for row in rows:
+            game_id = int(row["id"])
+            cover_path = str(row["cover_path"])
+            normalized = cover_path.replace("\\", "/").lower()
+            if f"/covers/{game_id}." in normalized:
+                updates.append((cover_path, game_id))
+        if updates:
+            self.conn.executemany(
+                "UPDATE games SET custom_cover_path = ? WHERE id = ?",
+                updates,
+            )
 
     def _ensure_settings_columns(self) -> None:
         cols = {
@@ -192,6 +250,10 @@ class Database:
         if "cover_fetch_mode" not in cols:
             self.conn.execute(
                 "ALTER TABLE settings ADD COLUMN cover_fetch_mode TEXT DEFAULT 'local_prefer'"
+            )
+        if "locale_emulator_leproc_path" not in cols:
+            self.conn.execute(
+                "ALTER TABLE settings ADD COLUMN locale_emulator_leproc_path TEXT DEFAULT ''"
             )
 
     def ensure_default_user(self) -> int:
@@ -277,6 +339,22 @@ class Database:
             normalized = "local_prefer"
         self.conn.execute(
             "UPDATE settings SET cover_fetch_mode = ?, updated_at = ? WHERE id = 1",
+            (normalized, datetime.utcnow().isoformat()),
+        )
+        self.conn.commit()
+
+    def get_locale_emulator_leproc_path(self) -> str:
+        row = self.conn.execute(
+            "SELECT locale_emulator_leproc_path FROM settings WHERE id = 1"
+        ).fetchone()
+        if row is None or row["locale_emulator_leproc_path"] is None:
+            return ""
+        return str(row["locale_emulator_leproc_path"]).strip()
+
+    def set_locale_emulator_leproc_path(self, path: str) -> None:
+        normalized = path.strip()
+        self.conn.execute(
+            "UPDATE settings SET locale_emulator_leproc_path = ?, updated_at = ? WHERE id = 1",
             (normalized, datetime.utcnow().isoformat()),
         )
         self.conn.commit()
@@ -379,7 +457,7 @@ class Database:
                 COALESCE(NULLIF(g.custom_name, ''), g.name) AS name,
                 g.root_dir,
                 COALESCE(NULLIF(g.custom_launch_exe, ''), g.launch_exe) AS launch_exe,
-                g.cover_path,
+                COALESCE(NULLIF(g.custom_cover_path, ''), g.cover_path) AS cover_path,
                 g.vndb_id,
                 g.title_original,
                 g.title_localized,
@@ -432,6 +510,35 @@ class Database:
         )
         self.conn.commit()
 
+    def update_game_custom_cover(self, game_id: int, cover_path: str) -> None:
+        now = datetime.utcnow().isoformat()
+        self.conn.execute(
+            """
+            UPDATE games
+            SET custom_cover_path = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (cover_path, now, game_id),
+        )
+        self.conn.commit()
+
+    def update_game_cover_path(self, game_id: int, cover_path: str) -> None:
+        """Update non-custom cover cache path.
+
+        This never touches custom_cover_path, so user overrides remain highest
+        priority across scans and VNDB refreshes.
+        """
+        now = datetime.utcnow().isoformat()
+        self.conn.execute(
+            """
+            UPDATE games
+            SET cover_path = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (cover_path, now, game_id),
+        )
+        self.conn.commit()
+
     def list_games(self, user_id: int) -> list[GameRecord]:
         rows = self.conn.execute(
             """
@@ -440,7 +547,7 @@ class Database:
                 COALESCE(NULLIF(g.custom_name, ''), g.name) AS name,
                 g.root_dir,
                 COALESCE(NULLIF(g.custom_launch_exe, ''), g.launch_exe) AS launch_exe,
-                g.cover_path,
+                COALESCE(NULLIF(g.custom_cover_path, ''), g.cover_path) AS cover_path,
                 g.vndb_id,
                 g.title_original,
                 g.title_localized,
@@ -491,6 +598,141 @@ class Database:
             )
             for r in rows
         ]
+
+    def get_game_by_id(self, user_id: int, game_id: int) -> GameRecord | None:
+        """Return one game with the same fields as list_games.
+
+        Implemented as a scan of ``list_games(user_id)`` so the result matches the library list
+        exactly (avoids SQL drift for single-row fetch).
+        """
+        try:
+            gid = int(game_id)
+        except (TypeError, ValueError):
+            return None
+        for g in self.list_games(user_id):
+            if int(g.id) == gid:
+                return g
+        return None
+
+    def list_play_records(self, user_id: int, game_id: int, *, limit: int = 500) -> list[PlayRecordEntry]:
+        rows = self.conn.execute(
+            """
+            SELECT id, started_at, ended_at, duration_seconds
+            FROM play_records
+            WHERE user_id = ? AND game_id = ?
+            ORDER BY started_at DESC
+            LIMIT ?
+            """,
+            (user_id, game_id, limit),
+        ).fetchall()
+        return [
+            PlayRecordEntry(
+                id=int(r["id"]),
+                started_at=str(r["started_at"]),
+                ended_at=str(r["ended_at"]) if r["ended_at"] else None,
+                duration_seconds=int(r["duration_seconds"] or 0),
+            )
+            for r in rows
+        ]
+
+    def list_all_play_records(
+        self,
+        user_id: int,
+        *,
+        game_id: int | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+        min_duration_seconds: int | None = None,
+        max_duration_seconds: int | None = None,
+        limit: int = 20000,
+    ) -> list[PlayHistoryRow]:
+        """All play rows for user, newest first. Optional filters (dates as YYYY-MM-DD)."""
+        where = ["pr.user_id = ?"]
+        params: list[object] = [user_id]
+        if game_id is not None:
+            where.append("pr.game_id = ?")
+            params.append(game_id)
+        if date_from:
+            where.append("date(pr.started_at) >= date(?)")
+            params.append(date_from)
+        if date_to:
+            where.append("date(pr.started_at) <= date(?)")
+            params.append(date_to)
+        if min_duration_seconds is not None:
+            where.append("pr.duration_seconds >= ?")
+            params.append(min_duration_seconds)
+        if max_duration_seconds is not None:
+            where.append("pr.duration_seconds <= ?")
+            params.append(max_duration_seconds)
+        sql = f"""
+            SELECT
+                pr.id AS record_id,
+                pr.game_id,
+                pr.started_at,
+                pr.ended_at,
+                pr.duration_seconds,
+                COALESCE(NULLIF(g.custom_name, ''), g.name) AS game_name,
+                COALESCE(NULLIF(g.custom_cover_path, ''), g.cover_path) AS cover_path,
+                g.image_url
+            FROM play_records pr
+            JOIN games g ON g.id = pr.game_id
+            WHERE {' AND '.join(where)}
+            ORDER BY pr.started_at DESC
+            LIMIT ?
+        """
+        params.append(limit)
+        rows = self.conn.execute(sql, params).fetchall()
+        return [
+            PlayHistoryRow(
+                record_id=int(r["record_id"]),
+                game_id=int(r["game_id"]),
+                game_name=str(r["game_name"]),
+                cover_path=r["cover_path"],
+                image_url=r["image_url"],
+                started_at=str(r["started_at"]),
+                ended_at=str(r["ended_at"]) if r["ended_at"] else None,
+                duration_seconds=int(r["duration_seconds"] or 0),
+            )
+            for r in rows
+        ]
+
+    def delete_play_records_by_ids(self, user_id: int, record_ids: list[int]) -> int:
+        if not record_ids:
+            return 0
+        placeholders = ",".join("?" * len(record_ids))
+        cur = self.conn.execute(
+            f"DELETE FROM play_records WHERE user_id = ? AND id IN ({placeholders})",
+            (user_id, *record_ids),
+        )
+        self.conn.commit()
+        return int(cur.rowcount or 0)
+
+    def delete_all_play_records(self, user_id: int) -> int:
+        row = self.conn.execute(
+            "SELECT COUNT(*) AS c FROM play_records WHERE user_id = ?",
+            (user_id,),
+        ).fetchone()
+        n = int(row["c"]) if row else 0
+        self.conn.execute("DELETE FROM play_records WHERE user_id = ?", (user_id,))
+        self.conn.commit()
+        return n
+
+    def get_game_storage_debug(self, game_id: int) -> dict[str, str | None] | None:
+        """Raw DB columns for troubleshooting (stored vs custom fields)."""
+        row = self.conn.execute(
+            """
+            SELECT
+                name, launch_exe, custom_name, custom_launch_exe,
+                cover_path, custom_cover_path, root_dir, vndb_id,
+                image_url, source, created_at, updated_at
+            FROM games
+            WHERE id = ?
+            """,
+            (game_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {str(k): (str(row[k]) if row[k] is not None else None) for k in row.keys()}
 
     def record_play(self, user_id: int, game_id: int, duration_seconds: int) -> None:
         now = datetime.utcnow().isoformat()

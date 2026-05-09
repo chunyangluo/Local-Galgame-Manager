@@ -28,6 +28,8 @@ except Exception:  # pragma: no cover - requests should be present
 
 VNDB_BASE_URL = "https://api.vndb.org/kana"
 VNDB_VN_ENDPOINT = f"{VNDB_BASE_URL}/vn"
+BANGUMI_SEARCH_ENDPOINT = "https://api.bgm.tv/search/subject/{keyword}?type=4&max_results={limit}"
+BANGUMI_V0_SEARCH_ENDPOINT = "https://api.bgm.tv/v0/search/subjects"
 
 # Fields requested in a single search call. Keep this minimal but enough
 # for UI rendering and persistence.
@@ -189,7 +191,22 @@ class VndbService:
         }
         outcome = self._post_json(VNDB_VN_ENDPOINT, body, query)
         if not outcome.success:
+            # Fallback: use Bangumi as secondary metadata source.
+            bgm_outcome = self._search_bangumi(cleaned, original_query=query, limit=limit)
+            if bgm_outcome.success:
+                return bgm_outcome
             return outcome
+        # VNDB hit but sometimes lacks usable cover; enrich with Bangumi image.
+        if outcome.record is not None and not outcome.record.image_url:
+            bgm_outcome = self._search_bangumi(cleaned, original_query=query, limit=limit)
+            if bgm_outcome.success and bgm_outcome.record is not None:
+                bgm = bgm_outcome.record
+                if bgm.image_url:
+                    outcome.record.image_url = bgm.image_url
+                if not outcome.record.title_localized and bgm.title_localized:
+                    outcome.record.title_localized = bgm.title_localized
+                if not outcome.record.title_original and bgm.title_original:
+                    outcome.record.title_original = bgm.title_original
         # ``outcome.record`` is set when normalize is successful.
         return outcome
 
@@ -363,6 +380,99 @@ class VndbService:
 
         kind, detail = last_error or (ERR_NETWORK, "exhausted retries")
         return VndbOutcome(query=original_query, success=False, error_kind=kind, error_detail=detail)
+
+    def _search_bangumi(self, cleaned_query: str, original_query: str, limit: int = 1) -> VndbOutcome:
+        assert self._session is not None  # narrowed by callers
+        safe_limit = max(1, min(limit, 10))
+        try:
+            self._limiter.acquire()
+            resp = self._session.get(
+                BANGUMI_SEARCH_ENDPOINT.format(keyword=cleaned_query, limit=safe_limit),
+                headers=self._headers,
+                timeout=self._timeout,
+            )
+            if resp.status_code < 400:
+                payload = resp.json()
+                subjects = payload.get("list") if isinstance(payload, dict) else None
+                record = self._normalize_bangumi_subject((subjects or [None])[0])
+                if record is not None:
+                    return VndbOutcome(query=original_query, success=True, record=record)
+        except Exception:
+            pass
+
+        try:
+            self._limiter.acquire()
+            payload = {"keyword": cleaned_query, "filter": {"type": [4]}, "limit": safe_limit}
+            resp = self._session.post(
+                BANGUMI_V0_SEARCH_ENDPOINT,
+                headers=self._headers,
+                data=json.dumps(payload),
+                timeout=self._timeout,
+            )
+            if resp.status_code >= 400:
+                return VndbOutcome(
+                    query=original_query,
+                    success=False,
+                    error_kind=ERR_HTTP,
+                    error_detail=f"bangumi {resp.status_code}",
+                )
+            data = resp.json()
+            subjects = data.get("data") if isinstance(data, dict) else None
+            record = self._normalize_bangumi_subject((subjects or [None])[0])
+            if record is None:
+                return VndbOutcome(
+                    query=original_query,
+                    success=False,
+                    error_kind=ERR_NO_MATCH,
+                    error_detail="bangumi no candidates",
+                )
+            return VndbOutcome(query=original_query, success=True, record=record)
+        except Exception as exc:
+            return VndbOutcome(
+                query=original_query,
+                success=False,
+                error_kind=ERR_NETWORK,
+                error_detail=f"bangumi fallback failed: {exc}",
+            )
+
+    @staticmethod
+    def _normalize_bangumi_subject(raw: Any) -> VndbRecord | None:
+        if not isinstance(raw, dict):
+            return None
+        sid = raw.get("id")
+        if sid is None:
+            return None
+        title = str(raw.get("name") or raw.get("name_cn") or "").strip()
+        if not title:
+            return None
+        images = raw.get("images") if isinstance(raw.get("images"), dict) else {}
+        image_url = (
+            images.get("large")
+            or images.get("common")
+            or images.get("medium")
+            or images.get("small")
+        )
+        rating = None
+        rating_info = raw.get("rating")
+        if isinstance(rating_info, dict):
+            score = rating_info.get("score")
+            try:
+                rating = float(score) if score is not None else None
+            except (TypeError, ValueError):
+                rating = None
+        return VndbRecord(
+            vndb_id=f"bgm:{sid}",
+            title=title,
+            title_original=str(raw.get("name") or "").strip() or None,
+            title_localized=str(raw.get("name_cn") or "").strip() or None,
+            description=None,
+            rating=rating,
+            released=None,
+            platforms=[],
+            languages=[],
+            image_url=str(image_url).strip() if image_url else None,
+            screenshots=[],
+        )
 
     @staticmethod
     def _sleep_backoff(attempt: int, base: float = 0.6) -> None:

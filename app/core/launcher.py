@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ctypes
 import subprocess
+import sys
 import time
 from pathlib import Path
 from ctypes import wintypes
@@ -42,6 +43,42 @@ class GameLauncher:
         started = int(time.time())
         process.wait()
         ended = int(time.time())
+        return max(0, ended - started)
+
+    def launch_via_locale_emulator(self, leproc_exe: str, target_exe: str) -> int:
+        """Run game.exe through Locale Emulator's LEProc (waits until game exits).
+
+        Uses the default invocation ``LEProc.exe <absolute_target>`` so LE picks
+        per-exe ``.le.config`` / global profile / built-in ja-JP (see upstream LE).
+        """
+        if sys.platform != "win32":
+            raise RuntimeError("Locale Emulator is only supported on Windows.")
+        leproc = Path(leproc_exe)
+        exe = Path(target_exe)
+        if not leproc.is_file():
+            raise FileNotFoundError(f"LEProc not found: {leproc_exe}")
+        if not exe.is_file():
+            raise FileNotFoundError(f"Launch target not found: {target_exe}")
+        if leproc.name.lower() != "leproc.exe":
+            raise ValueError("Locale Emulator setting must point to LEProc.exe")
+        abs_target = str(exe.resolve())
+        # Use the game's directory as cwd (same as normal ``launch()``). Many packed
+        # titles (e.g. MoleBox "boxfile") resolve archives relative to cwd; using LE's
+        # install dir here breaks those with "COULD NOT OPEN BOXFILE". LEProc still
+        # loads its DLLs from its own executable directory via the Windows loader.
+        process = subprocess.Popen(
+            [str(leproc.resolve()), abs_target],
+            cwd=str(exe.parent),
+        )
+        started = int(time.time())
+        process.wait()
+        ended = int(time.time())
+        rc = process.returncode
+        if rc is not None and rc != 0:
+            raise RuntimeError(
+                f"LEProc.exe 退出码 {rc}，游戏可能未成功启动。请确认 LE 已正确安装、"
+                "且指向安装目录内的 LEProc.exe。"
+            )
         return max(0, ended - started)
 
     def _launch_as_admin(self, exe: Path) -> int:

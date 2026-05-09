@@ -13,7 +13,9 @@ from PIL import Image
 from app.core.cover_manager import CoverManager
 from app.core.scanner import GameScanner
 from app.data.database import Database
+from app.logging_setup import setup_logging
 from app.plugins.manager import PluginManager
+from app.services.app_data_dir import get_app_data_dir
 from app.services.search_service import SearchService
 from app.services.vndb_service import VndbService, clean_title_for_search
 
@@ -198,6 +200,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 def run() -> int:
     args = build_parser().parse_args()
+    setup_logging(data_dir=get_app_data_dir())
     tester = FeatureSelfTester(
         with_network=args.with_network,
         with_ui=args.with_ui,

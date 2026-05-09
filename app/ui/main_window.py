@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+import logging
+import sys
+from collections.abc import Callable
+from functools import partial
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QPoint, QRunnable, QThread, QThreadPool, QTimer, QSize, Qt, Signal
@@ -7,6 +11,7 @@ from PySide6.QtGui import (
     QAction,
     QCloseEvent,
     QColor,
+    QCursor,
     QFontMetrics,
     QIcon,
     QLinearGradient,
@@ -16,6 +21,7 @@ from PySide6.QtGui import (
     QPolygon,
 )
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -36,6 +42,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSystemTrayIcon,
+    QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -46,6 +53,8 @@ from app.core.cover_manager import CoverManager
 from app.core.launcher import GameLauncher
 from app.core.scanner import GameScanner
 from app.data.database import Database, GameRecord, VndbImportRow
+from app.ui.game_detail_dialog import GameDetailDialog
+from app.ui.play_history_window import PlayHistoryWindow
 from app.plugins.manager import PluginManager
 from app.services.backup_service import BackupService
 from app.services.search_service import SearchService
@@ -191,6 +200,55 @@ class PluginSettingsDialog(QDialog):
         return disabled
 
 
+class LocaleEmulatorSettingsDialog(QDialog):
+    """Configure path to Locale Emulator's LEProc.exe (optional Windows locale launch)."""
+
+    def __init__(self, current_path: str, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Locale Emulator (LE)")
+        self.resize(640, 220)
+        root = QVBoxLayout(self)
+        info = QLabel(
+            "在本机安装 <a href=\"https://github.com/xupefei/Locale-Emulator/releases\">"
+            "Locale Emulator</a> 后，选择其安装目录下的 <b>LEProc.exe</b>。"
+            " 启动游戏时可选用「LE 转区启动」；LE 仓库已归档，发行版仍可下载使用。"
+        )
+        info.setWordWrap(True)
+        info.setOpenExternalLinks(True)
+        info.setTextInteractionFlags(Qt.TextBrowserInteraction)
+        root.addWidget(info)
+        row = QHBoxLayout()
+        self._path = QLineEdit(current_path)
+        self._path.setPlaceholderText(r"例如 C:\LocaleEmulator\LEProc.exe")
+        row.addWidget(self._path, 1)
+        browse = QPushButton("浏览…")
+        browse.clicked.connect(self._browse)
+        row.addWidget(browse)
+        root.addLayout(row)
+        hint = QLabel("留空并确定表示不使用 LE；之后仅显示普通启动。")
+        hint.setStyleSheet("color:#93A1B6;font-size:11px;")
+        hint.setWordWrap(True)
+        root.addWidget(hint)
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        root.addWidget(buttons)
+
+    def _browse(self) -> None:
+        start = self._path.text().strip() or str(Path.home())
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择 LEProc.exe",
+            start,
+            "LEProc.exe (LEProc.exe)",
+        )
+        if path:
+            self._path.setText(path)
+
+    def leproc_path(self) -> str:
+        return self._path.text().strip()
+
+
 class TwoLineElideLabel(QLabel):
     def __init__(self, text: str = "", parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -240,8 +298,16 @@ class TwoLineElideLabel(QLabel):
 
 
 class GameCardWidget(QWidget):
+    retry_cover_requested = Signal(int)
+
     def __init__(self, game: GameRecord, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._game = game
+        self._retry_emitted = False
+        self._force_no_cover = False
+        self._retry_timer = QTimer(self)
+        self._retry_timer.setSingleShot(True)
+        self._retry_timer.timeout.connect(self._emit_retry_request)
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(4)
@@ -297,9 +363,22 @@ class GameCardWidget(QWidget):
         # VNDB images should be pre-cached by worker threads during import.
         # If cache is missing, keep placeholder to avoid UI freeze.
         if image_url and image_url.startswith(("http://", "https://")):
+            if self._force_no_cover:
+                self.cover.setPixmap(self._build_placeholder_cover("NO COVER"))
+                return
             self.cover.setPixmap(self._build_placeholder_cover("等待缓存"))
+            if not self._retry_emitted:
+                self._retry_emitted = True
+                self._retry_timer.start(120)
             return
         self.cover.setPixmap(self._build_placeholder_cover("NO COVER"))
+
+    def force_no_cover_placeholder(self) -> None:
+        self._force_no_cover = True
+        self._apply_cover(self._game.cover_path, self._game.image_url)
+
+    def _emit_retry_request(self) -> None:
+        self.retry_cover_requested.emit(self._game.id)
 
     def _scale_and_center_crop(self, source: QPixmap, target_size: QSize) -> QPixmap:
         """Scale to cover target rect, then crop center region."""
@@ -428,10 +507,12 @@ class _VndbTask(QRunnable):
             return
         outcome = self._vndb_service.search_title(self.name, limit=1)
         cached_cover: str | None = None
-        if outcome.success and outcome.record and outcome.record.image_url:
+        if outcome.success and outcome.record:
             try:
-                cached_cover = self._cover_manager.cache_vndb_image(
-                    outcome.record.image_url, outcome.record.vndb_id
+                cached_cover = self._cover_manager.cache_cover_with_fallback(
+                    image_url=outcome.record.image_url,
+                    cache_key=outcome.record.vndb_id,
+                    game_name=self.name,
                 )
             except Exception:
                 cached_cover = None
@@ -455,6 +536,81 @@ class _VndbTask(QRunnable):
                 cover_path=cached_cover,
             )
         self.signals.finished.emit(self.index, row, outcome)
+
+
+class _CoverRefetchSignals(QObject):
+    finished = Signal(int, str, bool)
+
+
+class _CoverRefetchTask(QRunnable):
+    def __init__(
+        self,
+        game_id: int,
+        vndb_id: str | None,
+        image_url: str,
+        game_name: str,
+        cover_manager: CoverManager,
+    ) -> None:
+        super().__init__()
+        self.signals = _CoverRefetchSignals()
+        self._game_id = game_id
+        self._vndb_id = vndb_id
+        self._image_url = image_url
+        self._game_name = game_name
+        self._cover_manager = cover_manager
+
+    def run(self) -> None:  # type: ignore[override]
+        cache_key = self._vndb_id or f"game_{self._game_id}"
+        cached = self._cover_manager.cache_cover_with_fallback(
+            image_url=self._image_url,
+            cache_key=cache_key,
+            game_name=self._game_name,
+        )
+        ok = bool(cached and Path(cached).exists())
+        self.signals.finished.emit(self._game_id, cached or "", ok)
+
+
+class _LaunchGameSignals(QObject):
+    finished = Signal(int, int, str)  # game_id, duration_seconds, game_name
+    failed = Signal(str)
+
+
+class _LaunchGameTask(QRunnable):
+    """Run ``GameLauncher`` off the UI thread so ``wait()`` does not freeze Qt."""
+
+    def __init__(
+        self,
+        launcher: GameLauncher,
+        *,
+        launch_exe: str,
+        locale_emulator: bool,
+        le_proc_path: str,
+        as_admin: bool,
+        game_id: int,
+        game_name: str,
+        signal_parent: QObject | None = None,
+    ) -> None:
+        super().__init__()
+        self.signals = _LaunchGameSignals(signal_parent)
+        self._launcher = launcher
+        self._launch_exe = launch_exe
+        self._locale_emulator = locale_emulator
+        self._le_proc_path = le_proc_path
+        self._as_admin = as_admin
+        self._game_id = game_id
+        self._game_name = game_name
+
+    def run(self) -> None:  # type: ignore[override]
+        try:
+            if self._locale_emulator:
+                duration = self._launcher.launch_via_locale_emulator(
+                    self._le_proc_path, self._launch_exe
+                )
+            else:
+                duration = self._launcher.launch(self._launch_exe, as_admin=self._as_admin)
+            self.signals.finished.emit(self._game_id, duration, self._game_name)
+        except Exception as exc:  # pragma: no cover
+            self.signals.failed.emit(str(exc))
 
 
 class VndbImportWorker(QObject):
@@ -653,119 +809,184 @@ class MainWindow(QMainWindow):
         self._render_batch_size = 10
         self._render_index = 0
         self._render_total = 0
+        self._cover_retry_pool = QThreadPool(self)
+        self._launch_pool = QThreadPool(self)
+        self._launch_pool.setMaxThreadCount(1)
+        self._cover_retry_pending: set[int] = set()
+        self._cover_retry_failed: set[int] = set()
+        self._cover_retry_startup_running = False
+        self._cover_retry_startup_total = 0
+        self._cover_retry_startup_done = 0
+        self._cover_retry_startup_success = 0
+        self._play_history_window: PlayHistoryWindow | None = None
 
         self._build_ui()
         self._setup_tray()
         self.refresh_games()
+        QTimer.singleShot(1500, self._startup_auto_fix_covers)
         if self.db.list_scan_roots():
             # Avoid blocking UI during startup; user can trigger scan explicitly.
             self.status.setText("已加载扫描目录，点击“全量扫描”开始更新游戏库")
+
+    def _make_toolbar_group(self, title: str, *, tier: str = "primary") -> tuple[QWidget, QHBoxLayout]:
+        """Labeled toolbar capsule: title + horizontal control row."""
+        wrapper = QWidget()
+        wrapper.setProperty("toolbarGroup", True)
+        wrapper.setProperty("toolbarTier", tier)
+        outer = QHBoxLayout(wrapper)
+        outer.setContentsMargins(10, 8, 12, 8)
+        outer.setSpacing(10)
+        title_lbl = QLabel(title)
+        title_lbl.setObjectName("toolbarSectionLabel")
+        inner = QHBoxLayout()
+        inner.setSpacing(8)
+        outer.addWidget(title_lbl, 0, Qt.AlignVCenter)
+        outer.addLayout(inner, 1)
+        return wrapper, inner
+
+    def _polish_toolbar_control(self, widget: QWidget) -> None:
+        widget.setCursor(Qt.PointingHandCursor)
 
     def _build_ui(self) -> None:
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
 
-        toolbar = QHBoxLayout()
-        toolbar.setSpacing(14)
+        # --- Tier 1: discovery + library (most used) ---
+        row_primary = QHBoxLayout()
+        row_primary.setSpacing(12)
 
-        group_search = QWidget()
-        group_search.setProperty("toolbarGroup", True)
-        search_layout = QHBoxLayout(group_search)
-        search_layout.setContentsMargins(10, 8, 10, 8)
-        search_layout.setSpacing(8)
+        wrap_find, lay_find = self._make_toolbar_group("找游戏", tier="primary")
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("搜索游戏（中/英/日）")
         self.search_input.textChanged.connect(self._apply_filters)
-        search_layout.addWidget(self.search_input, 3)
-
+        lay_find.addWidget(self.search_input, 1)
         self.favorite_only = QCheckBox("仅收藏")
         self.favorite_only.stateChanged.connect(self._apply_filters)
-        search_layout.addWidget(self.favorite_only)
-        toolbar.addWidget(group_search, 3)
+        lay_find.addWidget(self.favorite_only)
+        self.btn_refresh = QPushButton("刷新")
+        self.btn_refresh.clicked.connect(self.refresh_games)
+        self.btn_refresh.setToolTip("重新从数据库加载列表与筛选结果")
+        lay_find.addWidget(self.btn_refresh)
+        self._polish_toolbar_control(self.btn_refresh)
+        row_primary.addWidget(wrap_find, 3)
 
-        group_scan = QWidget()
-        group_scan.setProperty("toolbarGroup", True)
-        scan_layout = QHBoxLayout(group_scan)
-        scan_layout.setContentsMargins(10, 8, 10, 8)
-        scan_layout.setSpacing(8)
+        wrap_lib, lay_lib = self._make_toolbar_group("库", tier="primary")
         self.btn_add_root = QPushButton("添加目录")
         self.btn_add_root.clicked.connect(self._add_scan_root)
-        scan_layout.addWidget(self.btn_add_root)
         self.btn_add_root.setToolTip("选择一个游戏根目录加入扫描范围")
+        lay_lib.addWidget(self.btn_add_root)
 
         self.btn_manage_roots = QPushButton("管理目录")
         self.btn_manage_roots.clicked.connect(self._manage_scan_roots)
-        scan_layout.addWidget(self.btn_manage_roots)
         self.btn_manage_roots.setToolTip("查看、删除或清空已添加的扫描目录")
+        lay_lib.addWidget(self.btn_manage_roots)
 
         self.btn_scan = QPushButton("全量扫描")
         self.btn_scan.clicked.connect(self._scan_all)
-        scan_layout.addWidget(self.btn_scan)
         self.btn_scan.setToolTip("重新扫描所有已配置目录并同步游戏列表")
+        lay_lib.addWidget(self.btn_scan)
 
-        self.btn_vndb_import = QPushButton("VNDB 批量导入")
+        self.btn_vndb_import = QPushButton("VNDB 导入")
         self.btn_vndb_import.clicked.connect(self._vndb_import_from_existing)
-        scan_layout.addWidget(self.btn_vndb_import)
-        self.btn_vndb_import.setToolTip("使用 VNDB 对当前游戏进行批量匹配与元数据导入")
+        self.btn_vndb_import.setToolTip("对当前库批量匹配 VNDB / Bangumi 元数据与封面")
+        lay_lib.addWidget(self.btn_vndb_import)
+        for w in (self.btn_add_root, self.btn_manage_roots, self.btn_scan, self.btn_vndb_import):
+            self._polish_toolbar_control(w)
+        row_primary.addWidget(wrap_lib, 4)
+        root.addLayout(row_primary)
 
-        self.btn_backup = QPushButton("导出备份")
-        self.btn_backup.clicked.connect(self._backup)
-        scan_layout.addWidget(self.btn_backup)
-        self.btn_backup.setToolTip("备份游戏列表和设置到本地文件")
+        # --- Tier 2: account, display, system + overflow menu ---
+        row_secondary = QHBoxLayout()
+        row_secondary.setSpacing(12)
 
-        self.btn_restore = QPushButton("恢复备份")
-        self.btn_restore.clicked.connect(self._restore)
-        scan_layout.addWidget(self.btn_restore)
-        self.btn_restore.setToolTip("从备份文件恢复游戏列表和设置")
-        toolbar.addWidget(group_scan, 4)
-
-        group_setting = QWidget()
-        group_setting.setProperty("toolbarGroup", True)
-        setting_layout = QHBoxLayout(group_setting)
-        setting_layout.setContentsMargins(10, 8, 10, 8)
-        setting_layout.setSpacing(8)
-        self.btn_startup = QPushButton("OFF")
-        self.btn_startup.setCheckable(True)
-        self.btn_startup.clicked.connect(self._toggle_startup)
-        setting_layout.addWidget(self.btn_startup)
-        self.btn_startup.setToolTip("开机时自动启动本程序")
-
+        wrap_acct, lay_acct = self._make_toolbar_group("账户", tier="secondary")
         self.user_picker = QComboBox()
+        self.user_picker.setMinimumWidth(160)
         self.user_picker.currentIndexChanged.connect(self._switch_user_from_picker)
-        setting_layout.addWidget(self.user_picker)
         self.user_picker.setToolTip("切换当前本地用户")
-
+        lay_acct.addWidget(self.user_picker, 1)
         self.btn_add_user = QPushButton("新建用户")
         self.btn_add_user.clicked.connect(self._add_user)
-        setting_layout.addWidget(self.btn_add_user)
         self.btn_add_user.setToolTip("创建并切换到新的本地用户")
+        lay_acct.addWidget(self.btn_add_user)
+        self._polish_toolbar_control(self.btn_add_user)
+        row_secondary.addWidget(wrap_acct, 2)
 
-        self.btn_plugins = QPushButton("插件管理")
-        self.btn_plugins.clicked.connect(self._open_plugin_settings)
-        setting_layout.addWidget(self.btn_plugins)
-        self.btn_plugins.setToolTip("启用或禁用扫描插件")
-
-        self.btn_online_cover = QPushButton("")
-        self.btn_online_cover.clicked.connect(self._toggle_online_cover)
-        setting_layout.addWidget(self.btn_online_cover)
-        self.btn_online_cover.setToolTip("切换封面策略：仅本地 / 本地优先 / 网图优先")
-        self._apply_cover_fetch_mode_ui()
-
-        self.btn_toggle_view = QPushButton("视图: 网格模式")
+        wrap_disp, lay_disp = self._make_toolbar_group("显示", tier="secondary")
+        self.btn_toggle_view = QPushButton("网格视图")
         self.btn_toggle_view.clicked.connect(self._toggle_view_mode)
         self.btn_toggle_view.setCheckable(True)
         self.btn_toggle_view.setChecked(True)
         self.btn_toggle_view.setProperty("active", True)
-        setting_layout.addWidget(self.btn_toggle_view)
-        self.btn_toggle_view.setToolTip("切换网格视图/列表视图")
-        toolbar.addWidget(group_setting, 3)
+        self.btn_toggle_view.setToolTip("切换网格 / 列表视图")
+        lay_disp.addWidget(self.btn_toggle_view)
 
-        root.addLayout(toolbar)
+        self.btn_online_cover = QPushButton("")
+        self.btn_online_cover.clicked.connect(self._toggle_online_cover)
+        self.btn_online_cover.setToolTip("封面策略：仅本地 / 本地优先 / 网图优先")
+        self._apply_cover_fetch_mode_ui()
+        lay_disp.addWidget(self.btn_online_cover)
+        self._polish_toolbar_control(self.btn_toggle_view)
+        self._polish_toolbar_control(self.btn_online_cover)
+        self.btn_game_detail = QPushButton("游戏详情")
+        self.btn_game_detail.clicked.connect(self._open_selected_game_detail)
+        self.btn_game_detail.setToolTip("完整元数据、游玩记录、文件夹与调试信息（Ctrl+I）")
+        lay_disp.addWidget(self.btn_game_detail)
+        self._polish_toolbar_control(self.btn_game_detail)
+        self.btn_play_history = QPushButton("游玩历史")
+        self.btn_play_history.clicked.connect(self.open_play_history)
+        self.btn_play_history.setToolTip("按时间查看全部游玩记录，支持筛选与批量删除")
+        lay_disp.addWidget(self.btn_play_history)
+        self._polish_toolbar_control(self.btn_play_history)
+        row_secondary.addWidget(wrap_disp, 0)
+
+        wrap_sys, lay_sys = self._make_toolbar_group("系统", tier="secondary")
+        self.btn_startup = QPushButton("开机启动: OFF")
+        self.btn_startup.setCheckable(True)
+        self.btn_startup.clicked.connect(self._toggle_startup)
+        self.btn_startup.setToolTip("是否随 Windows 登录自动启动本程序")
+        lay_sys.addWidget(self.btn_startup)
+        self._polish_toolbar_control(self.btn_startup)
+
+        self.btn_more = QToolButton()
+        self.btn_more.setText("更多")
+        self.btn_more.setPopupMode(QToolButton.InstantPopup)
+        self.btn_more.setToolTip("备份、恢复、插件等不常用功能")
+        self._polish_toolbar_control(self.btn_more)
+        more_menu = QMenu(self.btn_more)
+        act_backup = QAction("导出备份", self)
+        act_backup.triggered.connect(self._backup)
+        act_backup.setToolTip("备份游戏库与设置到 zip")
+        more_menu.addAction(act_backup)
+        act_restore = QAction("恢复备份", self)
+        act_restore.triggered.connect(self._restore)
+        act_restore.setToolTip("从备份 zip 恢复数据")
+        more_menu.addAction(act_restore)
+        more_menu.addSeparator()
+        act_plugins = QAction("插件管理…", self)
+        act_plugins.triggered.connect(self._open_plugin_settings)
+        act_plugins.setToolTip("启用或禁用扫描结果插件")
+        more_menu.addAction(act_plugins)
+        more_menu.addSeparator()
+        act_history = QAction("游玩历史…", self)
+        act_history.triggered.connect(self.open_play_history)
+        act_history.setToolTip("独立窗口：全部游玩记录、筛选、清空")
+        more_menu.addAction(act_history)
+        more_menu.addSeparator()
+        act_le = QAction("Locale Emulator (LE)…", self)
+        act_le.triggered.connect(self._open_locale_emulator_settings)
+        act_le.setToolTip("配置 LEProc.exe，用于「LE 转区启动」Galgame")
+        more_menu.addAction(act_le)
+        self.btn_more.setMenu(more_menu)
+        lay_sys.addWidget(self.btn_more)
+        row_secondary.addWidget(wrap_sys, 0)
+        row_secondary.addStretch(1)
+        root.addLayout(row_secondary)
 
         self.empty_hint = QLabel(
-            "还没有游戏？点击顶部【添加扫描目录】导入你的游戏文件夹\n"
-            ">> 点击上方【添加目录】开始导入 <<"
+            "还没有游戏？在第一行「库」分组中点击【添加目录】导入游戏文件夹\n"
+            ">> 点击【添加目录】开始导入 <<"
         )
         self.empty_hint.setAlignment(Qt.AlignCenter)
         root.addWidget(self.empty_hint)
@@ -784,10 +1005,6 @@ class MainWindow(QMainWindow):
         self.games_list.setUniformItemSizes(False)
 
         actions = QHBoxLayout()
-        self.btn_refresh = QPushButton("刷新列表")
-        self.btn_refresh.clicked.connect(self.refresh_games)
-        self.btn_refresh.setToolTip("重新读取数据库并刷新当前列表")
-        actions.addWidget(self.btn_refresh)
         actions.addStretch(1)
         self.scan_progress = QProgressBar()
         self.scan_progress.setMinimum(0)
@@ -936,6 +1153,10 @@ class MainWindow(QMainWindow):
     def _start_scan_ui(self) -> None:
         self.btn_scan.setEnabled(False)
         self.btn_vndb_import.setEnabled(False)
+        self.btn_add_root.setEnabled(False)
+        self.btn_manage_roots.setEnabled(False)
+        self.btn_refresh.setEnabled(False)
+        self.btn_more.setEnabled(False)
         self.btn_cancel_scan.setEnabled(True)
         self.btn_cancel_scan.setVisible(True)
         self.scan_progress.setVisible(True)
@@ -944,6 +1165,10 @@ class MainWindow(QMainWindow):
     def _end_scan_ui(self) -> None:
         self.btn_scan.setEnabled(True)
         self.btn_vndb_import.setEnabled(True)
+        self.btn_add_root.setEnabled(True)
+        self.btn_manage_roots.setEnabled(True)
+        self.btn_refresh.setEnabled(True)
+        self.btn_more.setEnabled(True)
         self.btn_cancel_scan.setVisible(False)
         self.scan_progress.setVisible(False)
 
@@ -967,6 +1192,9 @@ class MainWindow(QMainWindow):
         targets: list[tuple[str, str, str]],
         roots: list[str] | None,
         valid_dirs: set[str] | None,
+        *,
+        show_result_dialog: bool = True,
+        on_import_finished: Callable[[], None] | None = None,
     ) -> None:
         self._vndb_worker = VndbImportWorker(
             targets=targets,
@@ -977,13 +1205,14 @@ class MainWindow(QMainWindow):
         )
         self._vndb_worker.progress.connect(self._on_vndb_progress)
         self._vndb_worker.finished.connect(
-            lambda rows, outcomes, cancelled: self._on_vndb_finished(
-                rows=rows,
-                outcomes=outcomes,
-                cancelled=cancelled,
+            partial(
+                self._on_vndb_finished,
                 roots=roots,
                 valid_dirs=valid_dirs,
+                targets=targets,
                 total=len(targets),
+                show_result_dialog=show_result_dialog,
+                on_import_finished=on_import_finished,
             )
         )
         self._vndb_worker.start()
@@ -1003,13 +1232,25 @@ class MainWindow(QMainWindow):
         rows: list[VndbImportRow],
         outcomes: list[VndbOutcome],
         cancelled: bool,
+        *,
         roots: list[str] | None,
         valid_dirs: set[str] | None,
+        targets: list[tuple[str, str, str]],
         total: int,
+        show_result_dialog: bool = True,
+        on_import_finished: Callable[[], None] | None = None,
     ) -> None:
         self._scan_running = False
         self._vndb_worker = None
         self._end_scan_ui()
+        # Keep all scanned titles in library even when VNDB lookup fails.
+        # VNDB success rows will overwrite these baseline records later.
+        successful_keys = {(row.root_dir, row.launch_exe) for row in rows}
+        for name, root_dir, launch_exe in targets:
+            if (root_dir, launch_exe) in successful_keys:
+                continue
+            cover = self.cover_manager.find_cover(root_dir, name) or ""
+            self.db.upsert_game(name, root_dir, launch_exe, cover)
         if rows:
             self.db.upsert_games_batch(rows)
         # Do not auto-delete unmatched rows during VNDB workflow.
@@ -1018,14 +1259,117 @@ class MainWindow(QMainWindow):
         self.refresh_games()
         success = len(rows)
         self.status.setText(f"VNDB 导入完成：成功 {success} / {total}")
-        dialog = VndbImportResultDialog(
-            total=total,
-            success=success,
-            cancelled=cancelled,
-            outcomes=outcomes,
-            parent=self,
+        if on_import_finished is not None:
+            on_import_finished()
+        if show_result_dialog:
+            dialog = VndbImportResultDialog(
+                total=total,
+                success=success,
+                cancelled=cancelled,
+                outcomes=outcomes,
+                parent=self,
+            )
+            dialog.exec()
+        elif total <= 1:
+            if cancelled:
+                self.status.setText("VNDB 元数据获取已取消")
+            elif success:
+                self.status.setText("VNDB 元数据已更新")
+            else:
+                self.status.setText("VNDB 元数据获取失败或未匹配")
+
+    def _startup_auto_fix_covers(self) -> None:
+        if self._scan_running:
+            return
+        if not self.games_cache:
+            self.refresh_games()
+        targets = [
+            game
+            for game in self.games_cache
+            if game.image_url
+            and game.image_url.startswith(("http://", "https://"))
+            and (not game.cover_path or not Path(game.cover_path).exists())
+        ]
+        if not targets:
+            return
+        self._cover_retry_startup_running = True
+        self._cover_retry_startup_total = len(targets)
+        self._cover_retry_startup_done = 0
+        self._cover_retry_startup_success = 0
+        self.status.setText(f"启动自动修复封面：0/{len(targets)}")
+        for game in targets:
+            self._request_cover_refetch(game.id, user_triggered=False)
+
+    def _request_cover_refetch(self, game_id: int, user_triggered: bool = True) -> None:
+        if game_id in self._cover_retry_pending:
+            return
+        game = next((g for g in self.games_cache if g.id == game_id), None)
+        if game is None:
+            game = self.db.get_game_by_id(self.current_user_id, game_id)
+        if game is None or not game.image_url:
+            return
+        if not game.image_url.startswith(("http://", "https://")):
+            return
+        self._cover_retry_pending.add(game_id)
+        task = _CoverRefetchTask(
+            game_id=game.id,
+            vndb_id=game.vndb_id,
+            image_url=game.image_url,
+            game_name=game.name,
+            cover_manager=self.cover_manager,
         )
-        dialog.exec()
+        task.signals.finished.connect(
+            lambda gid, path, ok: self._on_cover_refetch_finished(gid, path, ok, user_triggered),
+            Qt.QueuedConnection,
+        )
+        self._cover_retry_pool.start(task)
+
+    def _on_cover_refetch_finished(
+        self, game_id: int, cover_path: str, success: bool, user_triggered: bool
+    ) -> None:
+        self._cover_retry_pending.discard(game_id)
+        game = next((g for g in self.games_cache if g.id == game_id), None)
+        if game is None:
+            game = self.db.get_game_by_id(self.current_user_id, game_id)
+        if success:
+            self._cover_retry_failed.discard(game_id)
+            self.db.update_game_cover_path(game_id, cover_path)
+        else:
+            # Final fallback: try local intelligent cover detection.
+            local_cover = None
+            if game is not None:
+                local_cover = self.cover_manager.find_cover(game.root_dir, game.name)
+            if local_cover:
+                self._cover_retry_failed.discard(game_id)
+                self.db.update_game_cover_path(game_id, local_cover)
+                success = True
+                cover_path = local_cover
+            else:
+                self._cover_retry_failed.add(game_id)
+
+        if self._cover_retry_startup_running:
+            self._cover_retry_startup_done += 1
+            if success:
+                self._cover_retry_startup_success += 1
+            if self._cover_retry_startup_done < self._cover_retry_startup_total:
+                self.status.setText(
+                    f"启动自动修复封面：{self._cover_retry_startup_done}/{self._cover_retry_startup_total}"
+                )
+            else:
+                self._cover_retry_startup_running = False
+                self.refresh_games()
+                self.status.setText(
+                    f"启动自动修复封面完成：成功 {self._cover_retry_startup_success}/{self._cover_retry_startup_total}"
+                )
+                return
+
+        if user_triggered:
+            if success:
+                self.refresh_games()
+                self.status.setText("封面已重新获取")
+            else:
+                self.refresh_games()
+                self.status.setText("重新获取封面失败，已标记为 NO COVER")
 
     def _open_plugin_settings(self) -> None:
         # Refresh plugin registry before presenting options so new files under
@@ -1075,7 +1419,7 @@ class MainWindow(QMainWindow):
     def _refresh_startup_state(self) -> None:
         enabled = self.system_service.is_startup_enabled()
         self.btn_startup.setChecked(enabled)
-        self.btn_startup.setText("ON" if enabled else "OFF")
+        self.btn_startup.setText(f"开机启动: {'ON' if enabled else 'OFF'}")
 
     def _refresh_user_picker(self) -> None:
         users = self.db.list_users()
@@ -1124,7 +1468,13 @@ class MainWindow(QMainWindow):
                 item.setSizeHint(QSize(300, 320))
             item.setData(Qt.UserRole, game.id)
             self.games_list.addItem(item)
-            self.games_list.setItemWidget(item, GameCardWidget(game))
+            card = GameCardWidget(game)
+            if game.id in self._cover_retry_failed:
+                card.force_no_cover_placeholder()
+            card.retry_cover_requested.connect(
+                lambda gid, self=self: self._request_cover_refetch(gid, user_triggered=False)
+            )
+            self.games_list.setItemWidget(item, card)
         self._render_index = end
         if self._render_index < self._render_total:
             self.status.setText(f"正在渲染 {self._render_index}/{self._render_total} ...")
@@ -1150,22 +1500,153 @@ class MainWindow(QMainWindow):
         )
         self._update_action_state()
 
+    def _message_box_parent(self, explicit: QWidget | None) -> QWidget:
+        """Prefer explicit parent so dialogs appear above child windows (e.g. play history)."""
+        if explicit is not None:
+            return explicit
+        app = QApplication.instance()
+        if app is not None:
+            active = app.activeWindow()
+            if active is not None:
+                return active
+        return self
+
+    def is_locale_emulator_usable(self) -> bool:
+        if sys.platform != "win32":
+            return False
+        p = self.db.get_locale_emulator_leproc_path().strip()
+        if not p:
+            return False
+        path = Path(p)
+        return path.is_file() and path.name.lower() == "leproc.exe"
+
+    def _open_locale_emulator_settings(self) -> None:
+        cur = self.db.get_locale_emulator_leproc_path()
+        dlg = LocaleEmulatorSettingsDialog(cur, self)
+        if dlg.exec() != QDialog.Accepted:
+            return
+        path = dlg.leproc_path()
+        if path:
+            if not Path(path).is_file():
+                QMessageBox.warning(self, "路径无效", "未找到该文件，请重新选择 LEProc.exe。")
+                return
+            if Path(path).name.lower() != "leproc.exe":
+                QMessageBox.warning(
+                    self,
+                    "文件名无效",
+                    "请选择 Locale Emulator 安装目录中的 LEProc.exe。",
+                )
+                return
+        self.db.set_locale_emulator_leproc_path(path)
+        self.status.setText("已保存 Locale Emulator 路径" if path else "已清除 Locale Emulator 配置")
+
+    def launch_game_by_id(
+        self,
+        game_id: int,
+        *,
+        as_admin: bool = False,
+        locale_emulator: bool = False,
+        message_parent: QWidget | None = None,
+    ) -> None:
+        parent = self._message_box_parent(message_parent)
+        game = self.db.get_game_by_id(self.current_user_id, game_id)
+        if game is None:
+            QMessageBox.warning(parent, "未找到游戏", "该游戏记录不存在。")
+            return
+        if locale_emulator:
+            if not self.is_locale_emulator_usable():
+                r = QMessageBox.question(
+                    parent,
+                    "未配置 Locale Emulator",
+                    "使用 LE 转区前，需要指定本机安装目录里的 LEProc.exe。\n\n"
+                    "是否现在打开「Locale Emulator (LE)…」进行配置？\n\n"
+                    "安装包下载：\n"
+                    "https://github.com/xupefei/Locale-Emulator/releases",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes,
+                )
+                if r == QMessageBox.StandardButton.Yes:
+                    self._open_locale_emulator_settings()
+                return
+        le_path = self.db.get_locale_emulator_leproc_path().strip() if locale_emulator else ""
+        uid = self.current_user_id
+        self.status.setText(
+            f"正在通过 LE 启动: {game.name}…" if locale_emulator else f"正在启动: {game.name}…"
+        )
+        QApplication.processEvents()
+        log = logging.getLogger(__name__)
+        log.info(
+            "Launch queued game_id=%s le=%s admin=%s exe=%s",
+            game_id,
+            locale_emulator,
+            as_admin,
+            game.launch_exe,
+        )
+        task = _LaunchGameTask(
+            self.launcher,
+            launch_exe=game.launch_exe,
+            locale_emulator=locale_emulator,
+            le_proc_path=le_path,
+            as_admin=as_admin,
+            game_id=game.id,
+            game_name=game.name,
+            signal_parent=self,
+        )
+        task.signals.finished.connect(
+            lambda gid, dur, name, u=uid, mp=message_parent: self._on_game_launch_finished(
+                u, mp, gid, dur, name
+            ),
+            Qt.QueuedConnection,
+        )
+        task.signals.failed.connect(
+            lambda msg, mp=message_parent: self._on_game_launch_failed(mp, msg),
+            Qt.QueuedConnection,
+        )
+        self._launch_pool.start(task)
+
+    def _on_game_launch_finished(
+        self,
+        user_id: int,
+        message_parent: QWidget | None,
+        game_id: int,
+        duration: int,
+        game_name: str,
+    ) -> None:
+        parent = self._message_box_parent(message_parent)
+        try:
+            self.db.record_play(user_id, game_id, duration)
+            self.refresh_games()
+            self.status.setText(f"已退出: {game_name}，本次时长 {duration}s")
+        except Exception as exc:  # pragma: no cover
+            logging.getLogger(__name__).exception("record_play after launch")
+            QMessageBox.critical(parent, "记录游玩失败", str(exc))
+
+    def _on_game_launch_failed(self, message_parent: QWidget | None, message: str) -> None:
+        parent = self._message_box_parent(message_parent)
+        self.status.setText("启动失败")
+        QMessageBox.critical(parent, "启动失败", message)
+
     def _launch_selected(self, as_admin: bool = False) -> None:
         game = self._selected_game()
         if game is None:
             return
-        try:
-            duration = self.launcher.launch(game.launch_exe, as_admin=as_admin)
-            self.db.record_play(self.current_user_id, game.id, duration)
-            self.refresh_games()
-            self.status.setText(f"已退出: {game.name}，本次时长 {duration}s")
-        except Exception as exc:  # pragma: no cover
-            QMessageBox.critical(self, "启动失败", str(exc))
+        self.launch_game_by_id(game.id, as_admin=as_admin)
+
+    def open_play_history(self) -> None:
+        if self._play_history_window is None:
+            self._play_history_window = PlayHistoryWindow(self)
+        self._play_history_window.reload()
+        self._play_history_window.show()
+        self._play_history_window.raise_()
+        self._play_history_window.activateWindow()
 
     def _toggle_favorite(self) -> None:
         game = self._selected_game()
         if game is None:
             return
+        self._toggle_favorite_for_record(game)
+
+    def _toggle_favorite_for_record(self, game: GameRecord) -> None:
         self.db.set_favorite(self.current_user_id, game.id, not game.favorite)
         self.refresh_games()
 
@@ -1173,6 +1654,9 @@ class MainWindow(QMainWindow):
         game = self._selected_game()
         if game is None:
             return
+        self._fix_launch_exe_for_record(game)
+
+    def _fix_launch_exe_for_record(self, game: GameRecord) -> None:
         file_path, _ = QFileDialog.getOpenFileName(
             self, "选择启动程序", game.root_dir, "Executable (*.exe)"
         )
@@ -1188,22 +1672,7 @@ class MainWindow(QMainWindow):
         game = self._selected_game()
         if game is None:
             return
-        dialog = EditGameDialog(game, self)
-        if dialog.exec() != QDialog.Accepted:
-            return
-        new_name, new_launch_exe = dialog.values()
-        if not new_name:
-            QMessageBox.warning(self, "输入无效", "游戏名不能为空。")
-            return
-        if not new_launch_exe:
-            QMessageBox.warning(self, "输入无效", "启动路径不能为空。")
-            return
-        if not Path(new_launch_exe).exists():
-            QMessageBox.warning(self, "路径无效", "启动路径不存在，请重新选择。")
-            return
-        self.db.update_game_identity(game.id, new_name, new_launch_exe)
-        self.refresh_games()
-        self.status.setText("已更新游戏名称与启动路径")
+        self.edit_game_identity_for_game_id(game.id)
 
     def _create_category(self) -> None:
         text, ok = QInputDialog.getText(self, "新建分类", "分类名称")
@@ -1216,6 +1685,9 @@ class MainWindow(QMainWindow):
         game = self._selected_game()
         if game is None:
             return
+        self._assign_categories_for_record(game)
+
+    def _assign_categories_for_record(self, game: GameRecord) -> None:
         current = game.categories
         text, ok = QInputDialog.getText(
             self,
@@ -1235,22 +1707,109 @@ class MainWindow(QMainWindow):
         game = self._selected_game()
         if game is None:
             return
+        self.set_custom_cover_for_game_id(game.id)
+
+    def _retry_selected_cover(self) -> None:
+        game = self._selected_game()
+        if game is None:
+            return
+        self._retry_cover_for_record(game)
+
+    def _retry_cover_for_record(self, game: GameRecord) -> None:
+        if self.retry_cover_for_game_id(game.id):
+            self.status.setText("正在后台重新获取封面...")
+
+    def open_game_detail(self, game_id: int) -> None:
+        GameDetailDialog(self, game_id).exec()
+
+    def _open_selected_game_detail(self) -> None:
+        game = self._selected_game()
+        if game is None:
+            self.status.setText("请先选择一个游戏")
+            return
+        self.open_game_detail(game.id)
+
+    def run_vndb_import_for_game_id(
+        self, game_id: int, *, on_finished: Callable[[], None] | None = None
+    ) -> None:
+        if self._scan_running:
+            QMessageBox.information(self, "请稍候", "已有扫描或 VNDB 任务在进行中。")
+            return
+        game = self.db.get_game_by_id(self.current_user_id, game_id)
+        if game is None:
+            QMessageBox.warning(self, "未找到游戏", "该游戏记录不存在。")
+            return
+        targets = [(game.name, game.root_dir, game.launch_exe)]
+        self._scan_running = True
+        self._start_scan_ui()
+        self.status.setText("VNDB 元数据获取中（当前游戏）…")
+        self._start_vndb_batch_import(
+            targets=targets,
+            roots=None,
+            valid_dirs=None,
+            show_result_dialog=False,
+            on_import_finished=on_finished,
+        )
+
+    def edit_game_identity_for_game_id(self, game_id: int) -> None:
+        game = self.db.get_game_by_id(self.current_user_id, game_id)
+        if game is None:
+            QMessageBox.warning(self, "未找到游戏", "该游戏记录不存在。")
+            return
+        dialog = EditGameDialog(game, self)
+        if dialog.exec() != QDialog.Accepted:
+            return
+        new_name, new_launch_exe = dialog.values()
+        if not new_name:
+            QMessageBox.warning(self, "输入无效", "游戏名不能为空。")
+            return
+        if not new_launch_exe:
+            QMessageBox.warning(self, "输入无效", "启动路径不能为空。")
+            return
+        if not Path(new_launch_exe).exists():
+            QMessageBox.warning(self, "路径无效", "启动路径不存在，请重新选择。")
+            return
+        self.db.update_game_identity(game_id, new_name, new_launch_exe)
+        self.refresh_games()
+        self.status.setText("已更新游戏名称与启动路径")
+
+    def set_custom_cover_for_game_id(self, game_id: int) -> bool:
+        game = self.db.get_game_by_id(self.current_user_id, game_id)
+        if game is None:
+            return False
         file_path, _ = QFileDialog.getOpenFileName(
             self, "选择封面", "", "Images (*.png *.jpg *.jpeg *.webp)"
         )
         if not file_path:
-            return
+            return False
         try:
-            cover = self.cover_manager.import_custom_cover(game.id, file_path)
-            self.db.upsert_game(game.name, game.root_dir, game.launch_exe, cover)
+            cover = self.cover_manager.import_custom_cover(game_id, file_path)
+            self.db.update_game_custom_cover(game_id, cover)
             self.refresh_games()
-        except Exception as exc:
+            self.status.setText("封面已更新")
+        except Exception as exc:  # pragma: no cover
             QMessageBox.critical(self, "封面更新失败", str(exc))
+            return False
+        return True
+
+    def retry_cover_for_game_id(self, game_id: int) -> bool:
+        game = self.db.get_game_by_id(self.current_user_id, game_id)
+        if game is None:
+            return False
+        if not game.image_url or not game.image_url.startswith(("http://", "https://")):
+            self.status.setText("当前游戏没有可重试的在线封面来源")
+            return False
+        self._cover_retry_failed.discard(game_id)
+        self._request_cover_refetch(game_id, user_triggered=True)
+        return True
 
     def _create_shortcut(self) -> None:
         game = self._selected_game()
         if game is None:
             return
+        self._create_shortcut_for_record(game)
+
+    def _create_shortcut_for_record(self, game: GameRecord) -> None:
         shortcut = self.system_service.create_desktop_shortcut(game.name, game.launch_exe)
         self.status.setText(f"快捷方式已创建: {shortcut}")
 
@@ -1309,6 +1868,11 @@ class MainWindow(QMainWindow):
         favorite_action.triggered.connect(self._toggle_favorite)
         self.addAction(favorite_action)
 
+        detail_action = QAction(self)
+        detail_action.setShortcut("Ctrl+I")
+        detail_action.triggered.connect(self._open_selected_game_detail)
+        self.addAction(detail_action)
+
     def _switch_user_from_picker(self) -> None:
         user_id = self.user_picker.currentData()
         if user_id is None:
@@ -1319,6 +1883,8 @@ class MainWindow(QMainWindow):
         self.current_user_id = user_id
         self.db.switch_user(user_id)
         self.refresh_games()
+        if self._play_history_window is not None:
+            self._play_history_window.reload()
 
     def _add_user(self) -> None:
         name, ok = QInputDialog.getText(self, "新建本地用户", "用户名")
@@ -1329,6 +1895,8 @@ class MainWindow(QMainWindow):
             self.current_user_id = user_id
             self.db.switch_user(user_id)
             self.refresh_games()
+            if self._play_history_window is not None:
+                self._play_history_window.reload()
             self.status.setText(f"已切换用户: {name.strip()}")
         except Exception as exc:
             QMessageBox.warning(self, "创建失败", str(exc))
@@ -1342,8 +1910,35 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
     def _show_game_context_menu(self, pos) -> None:
-        game = self._selected_game()
+        # 必须用「右键下的列表项」上的 UserRole（游戏 id），不能依赖 currentRow→filtered_games
+        # 下标：网格视图/分批渲染时二者可能不一致，会导致错 id 进而 get_game_by_id 为空。
+        # pos 来自 QAbstractItemView::customContextMenuRequested，为 viewport 坐标；勿把 pos 当作
+        # games_list 本体坐标再 mapFrom，否则会错项。嵌套卡片上点击时 itemAt(pos) 偶发为空，用光标回退。
+        vp = self.games_list.viewport()
+        item = self.games_list.itemAt(pos)
+        if item is None:
+            item = self.games_list.itemAt(vp.mapFromGlobal(QCursor.pos()))
+        if item is None:
+            item = self.games_list.currentItem()
+        if item is None:
+            return
+        self.games_list.setCurrentItem(item)
+        raw = item.data(Qt.ItemDataRole.UserRole)
+        if raw is None:
+            raw = item.data(Qt.UserRole)
+        if raw is None:
+            return
+        try:
+            game_id = int(raw)
+        except (TypeError, ValueError):
+            return
+        game = self.db.get_game_by_id(self.current_user_id, game_id)
         if game is None:
+            QMessageBox.warning(
+                self,
+                "未找到游戏",
+                f"无法加载该游戏（id={game_id}）。请点「刷新」或重新扫描库。",
+            )
             return
         menu = QMenu(self)
         menu.setToolTipsVisible(True)
@@ -1352,12 +1947,37 @@ class MainWindow(QMainWindow):
         launch_group.setEnabled(False)
 
         launch_action = menu.addAction("启动游戏")
-        launch_action.triggered.connect(self._launch_selected)
+        # QAction.triggered(bool): consume optional ``checked`` so game id is not overwritten.
+        launch_action.triggered.connect(
+            lambda checked=False, gid=game.id: self.launch_game_by_id(gid, message_parent=self)
+        )
         launch_action.setToolTip("正常权限启动当前游戏")
 
         admin_action = menu.addAction("管理员启动")
-        admin_action.triggered.connect(lambda: self._launch_selected(as_admin=True))
+        admin_action.triggered.connect(
+            lambda checked=False, gid=game.id: self.launch_game_by_id(
+                gid, as_admin=True, message_parent=self
+            )
+        )
         admin_action.setToolTip("以管理员权限启动当前游戏")
+
+        le_action = menu.addAction("LE 转区启动")
+        le_action.triggered.connect(
+            lambda checked=False, gid=game.id: self.launch_game_by_id(
+                gid, locale_emulator=True, message_parent=self
+            )
+        )
+        le_usable = self.is_locale_emulator_usable()
+        le_action.setToolTip(
+            "通过 Locale Emulator (LEProc) 转区运行。"
+            + (" 未配置 LE 时点击将提示设置路径。" if not le_usable else "")
+        )
+
+        menu.addSeparator()
+
+        detail_action = menu.addAction("游戏详情…")
+        detail_action.triggered.connect(lambda checked=False, gid=game.id: self.open_game_detail(gid))
+        detail_action.setToolTip("查看简介、评分、游玩记录、调试信息与快捷操作")
 
         menu.addSeparator()
 
@@ -1365,35 +1985,48 @@ class MainWindow(QMainWindow):
         edit_group.setEnabled(False)
 
         edit_action = menu.addAction("编辑名称/路径")
-        edit_action.triggered.connect(self._edit_game_identity)
+        edit_action.triggered.connect(
+            lambda checked=False, gid=game.id: self.edit_game_identity_for_game_id(gid)
+        )
         edit_action.setToolTip("手动修改游戏名称或启动文件路径")
 
         fix_action = menu.addAction("修正启动EXE")
-        fix_action.triggered.connect(self._fix_launch_exe)
+        fix_action.triggered.connect(lambda checked=False, g=game: self._fix_launch_exe_for_record(g))
         fix_action.setToolTip("重新识别或手动指定游戏启动文件")
 
         fav_text = "取消收藏" if game.favorite else "收藏"
         fav_action = menu.addAction(fav_text)
-        fav_action.triggered.connect(self._toggle_favorite)
+        fav_action.triggered.connect(lambda checked=False, g=game: self._toggle_favorite_for_record(g))
         fav_action.setToolTip("切换当前游戏的收藏状态")
 
         cover_action = menu.addAction("设置封面")
-        cover_action.triggered.connect(self._set_custom_cover)
+        cover_action.triggered.connect(
+            lambda checked=False, gid=game.id: self.set_custom_cover_for_game_id(gid)
+        )
         cover_action.setToolTip("为当前游戏指定本地封面图")
+        retry_cover_action = menu.addAction("重新获取封面")
+        retry_cover_action.triggered.connect(
+            lambda checked=False, g=game: self._retry_cover_for_record(g)
+        )
+        retry_cover_action.setToolTip("根据 VNDB 图源在后台重新下载封面缓存")
 
         menu.addSeparator()
 
         manage_group = menu.addSection("管理")
         manage_group.setEnabled(False)
         shortcut_action = menu.addAction("创建桌面快捷方式")
-        shortcut_action.triggered.connect(self._create_shortcut)
+        shortcut_action.triggered.connect(
+            lambda checked=False, g=game: self._create_shortcut_for_record(g)
+        )
         shortcut_action.setToolTip("在桌面创建当前游戏的快捷方式")
 
         assign_action = menu.addAction("分配分类")
-        assign_action.triggered.connect(self._assign_categories)
+        assign_action.triggered.connect(
+            lambda checked=False, g=game: self._assign_categories_for_record(g)
+        )
         assign_action.setToolTip("将当前游戏加入一个或多个分类")
 
-        menu.exec(self.games_list.mapToGlobal(pos))
+        menu.exec(QCursor.pos())
 
     def _toggle_view_mode(self) -> None:
         self._is_grid_view = not self._is_grid_view
@@ -1406,13 +2039,13 @@ class MainWindow(QMainWindow):
             self.games_list.setGridSize(QSize(380, 364))
             self.games_list.setWordWrap(True)
             self.games_list.setSpacing(24)
-            self.btn_toggle_view.setText("视图: 网格模式")
+            self.btn_toggle_view.setText("网格视图")
         else:
             self.games_list.setViewMode(QListView.ListMode)
             self.games_list.setGridSize(QSize())
             self.games_list.setWordWrap(False)
             self.games_list.setSpacing(10)
-            self.btn_toggle_view.setText("视图: 列表模式")
+            self.btn_toggle_view.setText("列表视图")
         self._apply_filters()
 
     def _update_empty_state(self) -> None:
@@ -1438,19 +2071,20 @@ class MainWindow(QMainWindow):
         self.empty_hint.style().polish(self.empty_hint)
         if self._highlight_phase:
             self.empty_hint.setText(
-                "还没有游戏？点击顶部【添加扫描目录】导入你的游戏文件夹\n"
-                ">> 点击上方【添加目录】开始导入 <<"
+                "还没有游戏？在第一行「库」分组中点击【添加目录】导入游戏文件夹\n"
+                ">> 点击【添加目录】开始导入 <<"
             )
         else:
             self.empty_hint.setText(
-                "还没有游戏？点击顶部【添加扫描目录】导入你的游戏文件夹\n"
-                "   点击上方【添加目录】开始导入   "
+                "还没有游戏？在第一行「库」分组中点击【添加目录】导入游戏文件夹\n"
+                "   点击【添加目录】开始导入   "
             )
 
     def _update_action_state(self) -> None:
         has_selection = self._selected_game() is not None
         # 预留 V2.0：此处可恢复更多底部批量/全局操作按钮。
         self.btn_refresh.setEnabled(True)
+        self.btn_game_detail.setEnabled(has_selection)
         if has_selection:
             self.games_list.setFocus()
 
@@ -1464,10 +2098,47 @@ class MainWindow(QMainWindow):
                 border-radius: 8px;
                 padding: 6px 12px;
             }
+            QPushButton:hover {
+                background-color: #454B55;
+                border-color: #6B788E;
+            }
+            QPushButton:pressed {
+                background-color: #2F343B;
+                border-color: #4A5568;
+            }
+            QToolButton {
+                color: #F2F4F7;
+                background-color: #3A3F46;
+                border: 1px solid #596273;
+                border-radius: 8px;
+                padding: 6px 12px;
+            }
+            QToolButton:hover {
+                background-color: #454B55;
+                border-color: #6B788E;
+            }
+            QToolButton:pressed {
+                background-color: #2F343B;
+                border-color: #4A5568;
+            }
+            QLabel#toolbarSectionLabel {
+                color: #8B96AA;
+                font-size: 11px;
+                font-weight: 600;
+                min-width: 3.2em;
+            }
             QWidget[toolbarGroup="true"] {
                 background-color: #232831;
                 border: 1px solid #3B4250;
                 border-radius: 10px;
+            }
+            QWidget[toolbarTier="primary"] {
+                background-color: #252B34;
+                border: 1px solid #4A5568;
+            }
+            QWidget[toolbarTier="secondary"] {
+                background-color: #1F242C;
+                border: 1px solid #343B48;
             }
             QPushButton:disabled {
                 color: #8A93A5;

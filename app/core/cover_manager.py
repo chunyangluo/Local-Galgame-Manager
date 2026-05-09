@@ -300,21 +300,39 @@ class CoverManager:
         cache_file = self.vndb_cache_dir / f"{vndb_id}{ext}"
         if cache_file.exists() and cache_file.stat().st_size > 0:
             return str(cache_file)
-        try:
-            response = requests.get(image_url, headers=self._http_headers, timeout=(3, 8))
-            response.raise_for_status()
-        except Exception:
-            return None
-        try:
-            from io import BytesIO
+        for attempt in range(3):
+            try:
+                response = requests.get(image_url, headers=self._http_headers, timeout=(3, 8))
+                response.raise_for_status()
+                from io import BytesIO
 
-            img = Image.open(BytesIO(response.content)).convert("RGB")
-            img.save(cache_file, "JPEG", quality=92)
-            return str(cache_file)
-        except Exception:
-            if cache_file.exists():
-                cache_file.unlink(missing_ok=True)
-            return None
+                img = Image.open(BytesIO(response.content)).convert("RGB")
+                img.save(cache_file, "JPEG", quality=92)
+                return str(cache_file)
+            except Exception:
+                if cache_file.exists():
+                    cache_file.unlink(missing_ok=True)
+                # Retry with short exponential backoff to absorb transient CDN/network issues.
+                if attempt < 2:
+                    time.sleep(min(0.8 * (2**attempt), 2.5))
+        return None
+
+    def cache_cover_with_fallback(
+        self, image_url: str | None, cache_key: str, game_name: str | None = None
+    ) -> str | None:
+        """Cache remote cover with multi-source fallback.
+
+        1) Try primary image URL (VNDB/Bangumi metadata image_url)
+        2) If failed, fallback to Bangumi-by-name online fetcher
+        3) Return None if all online attempts fail
+        """
+        if image_url:
+            cached = self.cache_vndb_image(image_url, cache_key)
+            if cached:
+                return cached
+        if game_name:
+            return self._fetch_cover_online(game_name)
+        return None
 
     def crop_cover(self, source_path: str, x: int, y: int, width: int, height: int) -> str:
         source = Path(source_path)
