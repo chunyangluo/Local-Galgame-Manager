@@ -182,6 +182,88 @@ dist\builds\<yyyyMMdd-HHmmss>\LocalGalgameManager\LocalGalgameManager.exe
 
 ---
 
+## 开发收尾流程（每次修改代码结束后建议执行）
+
+以下步骤与维护本仓库时在改完代码后的**标注流程**对齐：自测 → 打包 → 提交推送 →（可选）发版附件。在本地 PowerShell 中按顺序执行即可。
+
+1. **单元测试**
+
+   ```powershell
+   cd <项目根目录>
+   python -m pytest tests/ -q
+   ```
+
+2. **（可选）自检与冒烟**
+
+   ```powershell
+   python -m app.feature_selftest
+   ```
+
+3. **Windows 安装目录打包**
+
+   ```powershell
+   ./build.ps1
+   ```
+
+   记录控制台最后一行 **`Build output:`** 给出的 `LocalGalgameManager.exe` 路径；`dist\`、`build\` 已加入 `.gitignore`，不会进 Git。
+
+4. **（可选）打 zip 便于上传到 GitHub Releases**
+
+   将本次构建目录下的 `LocalGalgameManager` 文件夹打成 zip（路径与时间戳与第 3 步一致），例如：
+
+   ```powershell
+   $id = "yyyyMMdd-HHmmss"   # 与 dist\builds\<id> 一致
+   Compress-Archive -Path "dist\builds\$id\LocalGalgameManager" -DestinationPath "dist\builds\LocalGalgameManager-$id-win64.zip" -Force
+   ```
+
+5. **Git 提交与推送**
+
+   ```powershell
+   git add -A
+   git status
+   git commit -m "简述本次改动（英文或中文均可，完整句）"
+   git push origin main
+   ```
+
+   若本机尚未配置提交者信息：
+
+   ```powershell
+   git config user.name "你的 GitHub 用户名"
+   git config user.email "你的邮箱或 GitHub noreply 邮箱"
+   ```
+
+6. **GitHub CLI 与凭据（HTTPS 推送）**
+
+   确认已登录：
+
+   ```powershell
+   gh auth status
+   ```
+
+   若 Git 推送时反复要求密码或失败，让 Git 使用 `gh` 的凭据：
+
+   ```powershell
+   gh auth setup-git
+   ```
+
+   若仍出现 `Connection was reset`、`missing close_notify` 等，多为网络或代理问题：更换网络、关闭冲突代理，或将 `origin` 改为 SSH 后再 `git push`：
+
+   ```powershell
+   git remote set-url origin git@github.com:<用户名>/Local-Galgame-Manager.git
+   ```
+
+7. **（可选）GitHub Release**
+
+   在仓库页 **Releases → Draft a new release** 创建版本，上传第 4 步的 zip。若已安装 `gh` 且已登录，也可用 CLI 创建并附带附件（标签名自行替换）：
+
+   ```powershell
+   gh release create <标签名> --title "<标题>" --notes "<说明>" "dist\builds\LocalGalgameManager-<id>-win64.zip"
+   ```
+
+更完整的版本发布检查项见 **`docs/RELEASE_CHECKLIST.md`**。
+
+---
+
 ## 仓库与文档索引
 
 | 路径 | 内容 |
