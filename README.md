@@ -1,48 +1,31 @@
 # Local Galgame Manager
 
-面向 **Windows 10/11** 的本地 Galgame 启动器与元数据管理工具：**以 VNDB 为主、Bangumi 为辅** 补全信息，支持大库扫描、封面缓存与多用户数据隔离。
+<p align="center">
+  <img src="docs/assets/main-window.png" alt="Local Galgame Manager 主界面" width="820" />
+</p>
+
+**补图**：将主窗口截图保存为 `docs/assets/main-window.png`（或把上面路径改成 `.gif`）并提交后，GitHub 与本地预览即可显示；仓库默认不带大图以减小体积。
 
 ---
 
-## 项目简介
+## 核心亮点
 
-- 配置**扫描根目录**，自动识别游戏文件夹与启动 `exe`
-- 扫描后可选 **VNDB 批量导入**（多线程），失败或缺图时自动尝试 **Bangumi** 元数据/封面
-- **封面**：在线缓存（含重试与回退）、本地智能匹配、手动指定；策略可在「仅本地 / 本地优先 / 网图优先」间切换
-- **用户覆盖优先**：手动修改的**显示名、启动路径、封面**持久保存，不会被扫描/VNDB 覆盖（见下文「数据与优先级」）
-- **游戏库**：网格/列表视图、搜索、仅收藏、收藏与分类、游玩记录、备份/恢复
-- **系统**：托盘、开机自启、为单个游戏创建桌面快捷方式
-- **无 UI CLI**：扫描、入库、VNDB 导入与 JSON 摘要
-- **自检**：`app.feature_selftest` 一键冒烟（可选联网/UI）
+1. **Windows 10/11** 本地 Galgame 库：多根目录扫描、识别启动 `exe`、大库下仍可浏览与搜索（网格分页 + 列表分批）。  
+2. 元数据 **VNDB 为主、Bangumi 为辅**；封面在线缓存、重试与本地回退，策略支持仅本地 / 本地优先 / 网图优先。  
+3. **手动改过的名称、启动路径、封面、存档路径不会被扫描或 VNDB 覆盖**；内置存档 ZIP 备份/还原、游玩记录、多用户与无 UI 命令行。
 
 更细的操作说明见 **`docs/USER_GUIDE.md`**；插件开发见 **`docs/PLUGIN_GUIDE.md`**。
 
 ---
 
-## 数据与优先级（重要）
+## 数据目录与覆盖规则（简）
 
-### 运行时数据目录
-
-GUI 与 CLI 使用**同一套**数据目录解析逻辑（`app/services/app_data_dir.py`）：
-
-| 环境 | 路径 |
+| 项目 | 说明 |
 |------|------|
-| 一般情况 | `%LOCALAPPDATA%\LocalGalgameManager\data\` |
-| 无 `LOCALAPPDATA` 时 | `%USERPROFILE%\AppData\Local\LocalGalgameManager\data\` |
+| 数据根 | 一般为 `%LOCALAPPDATA%\LocalGalgameManager\data\`；无 `LOCALAPPDATA` 时回退到 `%USERPROFILE%\AppData\Local\LocalGalgameManager\data\`（逻辑见 `app/services/app_data_dir.py`） |
+| 主要文件 | `manager.sqlite3`（库与设置）、`covers/`（封面缓存）、`save-backups/`（存档 ZIP）、`plugins/`（外部扫描插件）、`system_config.json` 等 |
 
-其中包含：
-
-- **`manager.sqlite3`**：游戏库、扫描根、用户、设置、收藏与分类、游玩记录、VNDB 等字段
-- **`covers/`**：封面缓存（含 VNDB CDN、在线 Bangumi 等子目录）
-- **`plugins/`**：外部扫描插件（可选）
-- **`system_config.json`** 等系统侧配置
-
-首次启动会**尽力迁移**旧版放在「当前工作目录」或 exe 旁 `data/` 下的文件（**只补缺、不覆盖**已有新数据）。
-
-### 手动修改的优先级
-
-- **名称 / 启动 exe**：存于 `custom_name`、`custom_launch_exe`，列表与启动时优先于扫描结果。
-- **手动封面**：存于 `custom_cover_path`，优先于自动/`cover_path` 缓存路径。
+**关键规则**：手动修改写入 **`custom_name` / `custom_launch_exe` / `custom_cover_path` / `custom_save_root`**，列表与启动时优先于扫描与自动识别；扫描与 VNDB **不会覆盖**这些字段。首次启动会尽量从旧版「当前工作目录」或 exe 旁 `data/` **补缺迁移**（不覆盖已有新数据）。
 
 ---
 
@@ -50,55 +33,53 @@ GUI 与 CLI 使用**同一套**数据目录解析逻辑（`app/services/app_data
 
 ### 扫描与元数据
 
-- 多扫描根、管理对话框（添加/删除/清空）；清空全部根目录时会按设计清理库数据（见代码与 USER_GUIDE）
-- 扫描结束后可触发 **VNDB 导入**；**未匹配 VNDB 的条目仍会入库**，避免「扫到 40 条只剩 20 条」类丢失
-- **VNDB**：公开 Kana API（无 token），内置限速与重试；**Bangumi**：在 VNDB 失败或**无封面图 URL** 等情况下作为补充
-- **封面链路**：主图源下载失败时会重试并按名称走 Bangumi；仍失败则尝试**本地目录**智能选图；UI 侧另有后台修补与「重新获取封面」菜单项
+- 多扫描根、管理对话框（添加/删除/清空）；清空全部根目录时的数据清理见 **`docs/USER_GUIDE.md`**
+- 扫描后可 **VNDB 批量导入**（多线程）；未匹配 VNDB 的条目仍会入库
+- **VNDB**：公开 API（无 token），内置限速与重试；**Bangumi**：在 VNDB 失败或无封面 URL 等场景作补充
+- **封面**：下载失败会重试并按名称走 Bangumi；仍失败则尝试本地目录选图；支持菜单「重新获取封面」
 
 ### 界面
 
-- **两行工具栏**：第一行「找游戏」「库」；第二行「账户」「显示」「系统」+ **「更多」**（备份、恢复、插件、Locale Emulator 等）
-- 列表**分批渲染**，大库时保持可交互；状态栏与进度条显示扫描/VNDB 进度
+- **两行工具栏**：「找游戏」「库」；「账户」「显示」「系统」+ **「更多」**（备份、恢复、插件、Locale Emulator 等）
+- 网格视图为 **自适应列 + 固定行分页** 浏览；列表视图为分批渲染，大库可保持可交互
+
+### 存档管理（V2 当前）
+
+- 入口：**游戏右键菜单「存档管理…」**、**游戏详情「存档管理…」**（独立窗口）
+- 每个游戏可手动指定存档根目录（`custom_save_root`），支持一键打开目录；提供**自动发现**（内置规则 + 启发式扫描 + **可选 2DFan 线索库**）
+- 一键备份当前存档为 ZIP 到数据目录：`save-backups/<user_id>/<game_id>/`
+- 启动游戏前可开启**自动备份**（系统区开关：`启动前备份: ON/OFF`）
+- 备份会写入 **SHA256**；还原前先校验，不通过则阻止还原
+- 备份/还原使用后台任务，窗口内显示进度条与当前处理文件名
+- 一键还原所选 ZIP；还原前会自动备份当前存档（防覆盖误操作）
+- 备份列表支持：时间、名称、大小、重命名、删除
+- **2DFan 线索（可选）**：与仓库内 **`tools/2dfan-save-crawler`** 共用 SQLite；主界面 **「更多」→「2DFan 线索库与爬虫…」** 或 **存档管理** 中配置全局路径后，「自动发现」可合并社区路径（仅当目录在本机存在；候选列表中带 `[2DFan]` 标记）
 
 ### 插件
 
-- 扫描结果可经**内置 + 外部插件**变换后再入库
-- **运行时**外部插件目录：`%LOCALAPPDATA%\LocalGalgameManager\data\plugins\`（与上表数据根一致）
+- 扫描结果可经内置与外部插件变换后再入库；外部插件目录与数据根下 **`plugins/`** 一致  
 - 说明与示例：**`docs/PLUGIN_GUIDE.md`**
 
-### Locale Emulator（LE）转区启动
+### Locale Emulator（LE）转区
 
-本功能**不是** `data/plugins/` 下的 Python 扫描插件，而是可选的 **Windows 转区启动**：通过已安装的 [Locale Emulator](https://github.com/xupefei/Locale-Emulator/releases) 调用其 **`LEProc.exe`** 以日文区域等环境运行游戏（上游仓库已归档，**Releases** 仍可下载安装包）。
+可选 **Windows 日文等环境启动**：本机安装 [Locale Emulator](https://github.com/xupefei/Locale-Emulator/releases) 后，在程序内 **「更多」→「Locale Emulator (LE)…」** 选择 **`LEProc.exe`** 并保存；留空即关闭 LE 路径。
 
-**配置步骤**
+| 使用入口 | 说明 |
+|----------|------|
+| 游戏列表右键 | **「LE 转区启动」**（未配置时不可用） |
+| 游戏详情 | **「LE 转区启动」** 按钮 |
+| 游玩历史 | 每条记录旁的 **「LE」** |
 
-1. 在本机安装 Locale Emulator（解压或安装到任意目录，确保该目录下有 **`LEProc.exe`** 及 LE 自带 DLL）。
-2. 打开本程序，点击顶部 **「更多」→「Locale Emulator (LE)…」**。
-3. 在对话框中填写或 **「浏览…」** 选择 LE 安装目录下的 **`LEProc.exe`**，确定保存。  
-   - 留空并确定可清除配置，之后仅保留普通启动。
-4. 保存路径写入数据库字段 **`locale_emulator_leproc_path`**（与游戏库同库，见上文「数据与优先级」中的 `manager.sqlite3`）。
-
-**使用方式**（配置成功且路径有效后）
-
-| 入口 | 说明 |
-|------|------|
-| 游戏列表 **右键菜单** | **「LE 转区启动」**（未配置时该项为灰色不可用） |
-| **游戏详情** 窗口 | **「LE 转区启动」** 按钮；调试区会显示当前配置的 `locale_emulator_leproc_path` |
-| **游玩历史** 窗口 | 每条记录旁的 **「LE」** 按钮 |
-
-启动时本程序执行 **`LEProc.exe` + 游戏 exe 的绝对路径**（与 LE 官方命令行约定一致），由 LE 按自身规则选择 per-game `.le.config`、全局配置或默认日文环境。游戏退出后仍会写入**游玩记录**（与普通启动相同）。
-
-更细的说明（与扫描插件的区别）见 **`docs/PLUGIN_GUIDE.md`** 末尾「Locale Emulator」一节。
+启动参数为 **`LEProc.exe` + 游戏 exe 绝对路径**；退出后仍会写游玩记录。与扫描插件的区别见 **`docs/PLUGIN_GUIDE.md`** 末尾。
 
 ---
 
 ## 技术栈
 
-- Python 3.12+（开发与当前 CI/打包环境）
-- PySide6（Qt6）
-- SQLite（`sqlite3`）
+- Python 3.12+（开发与 CI/打包）
+- PySide6（Qt6）、SQLite（`sqlite3`）
 - PyInstaller（Windows 可执行文件）
-- requests / Pillow 等（见 `requirements.txt`）
+- 其余依赖见 **`requirements.txt`**
 
 ---
 
@@ -109,47 +90,28 @@ pip install -r requirements.txt
 python -m app.main
 ```
 
-在项目根目录执行；数据会写入上述 **LocalAppData** 下的 `data`，与是否从 IDE、终端或打包 exe 启动无关。
+在项目根目录执行；数据写入上述 **LocalAppData** 下的 `data`，与 IDE、终端或打包 exe 启动方式无关。
 
 ---
 
-## 命令行（无 UI）
+## 命令行速查（无 UI）
 
-输出 JSON 到终端：
+| 用途 | 命令 |
+|------|------|
+| 扫描并打印 JSON | `python -m app.cli --root "D:\Games\Galgame" --json` |
+| JSON 写入文件 | 同上，加 `--output scan_result.json` |
+| 扫描并写入数据库 | `python -m app.cli --root "D:\Games\Galgame" --import-db` |
+| VNDB 批量导入并入库 + 摘要 JSON | `python -m app.cli --root "D:\Games\Galgame" --vndb-import --threads 6 --import-db --json` |
 
-```bash
-python -m app.cli --root "D:\Games\Galgame" --json
-```
+完整参数与组合以 **`python -m app.cli --help`** 为准。
 
-写入文件（UTF-8）：
-
-```bash
-python -m app.cli --root "D:\Games\Galgame" --json --output "scan_result.json"
-```
-
-扫描并写入数据库：
-
-```bash
-python -m app.cli --root "D:\Games\Galgame" --import-db
-```
-
-VNDB 批量导入（多线程）并入库，附带摘要 JSON：
-
-```bash
-python -m app.cli --root "D:\Games\Galgame" --vndb-import --threads 6 --import-db --json
-```
-
-参数说明以 **`python -m app.cli --help`** 为准。
-
----
-
-## 功能自检
+### 功能自检
 
 ```bash
 python -m app.feature_selftest
 ```
 
-可选联网与 UI 冒烟，并输出 JSON 报告：
+可选联网与 UI 冒烟（并输出 JSON）：
 
 ```bash
 python -m app.feature_selftest --with-network --with-ui --json
@@ -165,26 +127,21 @@ python -m app.feature_selftest --with-network --with-ui --json
 ./build.ps1
 ```
 
-脚本会：
+脚本会：尝试结束已运行的 `LocalGalgameManager` 进程；使用带时间戳的输出目录；安装依赖后调用 PyInstaller；仅在构建成功后更新桌面快捷方式 **`Local Galgame Manager.lnk`**。
 
-1. 尝试结束已运行的 `LocalGalgameManager` 进程，避免文件占用导致打包失败  
-2. 使用**带时间戳**的输出目录，避免覆盖正在使用的旧构建  
-3. 安装依赖后调用 PyInstaller  
-4. 仅在**构建成功**后更新桌面快捷方式 **`Local Galgame Manager.lnk`**，指向本次生成的 `LocalGalgameManager.exe`
-
-**本次构建产物路径**形如：
+**产物路径示例**：
 
 ```text
 dist\builds\<yyyyMMdd-HHmmss>\LocalGalgameManager\LocalGalgameManager.exe
 ```
 
-控制台会打印 `Build output: ...` 完整路径。旧路径 `dist\LocalGalgameManager\` 若仍存在，可为历史构建；以脚本打印的目录为准。
+控制台会打印 `Build output: ...` 完整路径。
 
 ---
 
-## 开发收尾流程（每次修改代码结束后建议执行）
+## 开发收尾流程（建议）
 
-以下步骤与维护本仓库时在改完代码后的**标注流程**对齐：自测 → 打包 → 提交推送 →（可选）发版附件。在本地 PowerShell 中按顺序执行即可。
+改完代码后可在本地按顺序执行：**单元测试** → **（可选）自检** → **`./build.ps1`** → **提交推送**；打 zip、发 GitHub Release 与 `gh` 凭据等细节见原 **`docs/RELEASE_CHECKLIST.md`** 与下列命令备忘。
 
 1. **单元测试**
 
@@ -193,23 +150,19 @@ dist\builds\<yyyyMMdd-HHmmss>\LocalGalgameManager\LocalGalgameManager.exe
    python -m pytest tests/ -q
    ```
 
-2. **（可选）自检与冒烟**
+2. **（可选）自检**
 
    ```powershell
    python -m app.feature_selftest
    ```
 
-3. **Windows 安装目录打包**
+3. **打包**
 
    ```powershell
    ./build.ps1
    ```
 
-   记录控制台最后一行 **`Build output:`** 给出的 `LocalGalgameManager.exe` 路径；`dist\`、`build\` 已加入 `.gitignore`，不会进 Git。
-
-4. **（可选）打 zip 便于上传到 GitHub Releases**
-
-   将本次构建目录下的 `LocalGalgameManager` 文件夹打成 zip（路径与时间戳与第 3 步一致），例如：
+4. **（可选）打 zip 上传 Release**
 
    ```powershell
    $id = "yyyyMMdd-HHmmss"   # 与 dist\builds\<id> 一致
@@ -221,46 +174,22 @@ dist\builds\<yyyyMMdd-HHmmss>\LocalGalgameManager\LocalGalgameManager.exe
    ```powershell
    git add -A
    git status
-   git commit -m "简述本次改动（英文或中文均可，完整句）"
+   git commit -m "简述本次改动（完整句）"
    git push origin main
    ```
 
-   若本机尚未配置提交者信息：
+   若未配置提交者：`git config user.name "..."` 与 `git config user.email "..."`。
 
-   ```powershell
-   git config user.name "你的 GitHub 用户名"
-   git config user.email "你的邮箱或 GitHub noreply 邮箱"
-   ```
-
-6. **GitHub CLI 与凭据（HTTPS 推送）**
-
-   确认已登录：
+6. **HTTPS 推送与 `gh`**
 
    ```powershell
    gh auth status
-   ```
-
-   若 Git 推送时反复要求密码或失败，让 Git 使用 `gh` 的凭据：
-
-   ```powershell
    gh auth setup-git
    ```
 
-   若仍出现 `Connection was reset`、`missing close_notify` 等，多为网络或代理问题：更换网络、关闭冲突代理，或将 `origin` 改为 SSH 后再 `git push`：
+   若推送仍失败，可检查网络/代理或将 `origin` 改为 SSH 后再 `git push`。
 
-   ```powershell
-   git remote set-url origin git@github.com:<用户名>/Local-Galgame-Manager.git
-   ```
-
-7. **（可选）GitHub Release**
-
-   在仓库页 **Releases → Draft a new release** 创建版本，上传第 4 步的 zip。若已安装 `gh` 且已登录，也可用 CLI 创建并附带附件（标签名自行替换）：
-
-   ```powershell
-   gh release create <标签名> --title "<标题>" --notes "<说明>" "dist\builds\LocalGalgameManager-<id>-win64.zip"
-   ```
-
-更完整的版本发布检查项见 **`docs/RELEASE_CHECKLIST.md`**。
+7. **（可选）`gh release create`**：见 **`docs/RELEASE_CHECKLIST.md`**。
 
 ---
 
@@ -284,6 +213,40 @@ dist\builds\<yyyyMMdd-HHmmss>\LocalGalgameManager\LocalGalgameManager.exe
 - `hotfix/*`：线上修复  
 
 具体以仓库实际策略为准。
+
+---
+
+## FAQ
+
+**Q：改完界面代码要重启吗？**  
+A：要。Python/PySide6 在进程启动时加载模块，保存 `.py` 后需**退出程序再运行**（或重新启动调试会话）才能看到界面逻辑变更；点「刷新」只会重载数据库列表，不会热替换代码。
+
+**Q：打包报 `PermissionError` 或文件被占用？**  
+A：先退出正在运行的 **`LocalGalgameManager.exe`**（及托盘进程），再执行 `build.ps1`；脚本也会尝试结束同名进程。
+
+**Q：数据存在哪？换电脑怎么带？**  
+A：默认在 **`%LOCALAPPDATA%\LocalGalgameManager\data\`**。可用程序内 **「更多」→ 导出备份 / 恢复备份**（zip），或自行复制该目录（注意关闭程序后再拷）。
+
+**Q：VNDB 封面一直「等待缓存」或失败？**  
+A：在线封面由后台任务下载到 `covers/`，不在 UI 线程拉网图。可右键 **「重新获取封面」**；仍失败请检查网络、防火墙与 **`docs/USER_GUIDE.md`** 中的封面策略说明。
+
+**Q：扫描后条数变少？**  
+A：未匹配 VNDB 的条目仍会入库；若根目录被清空或删除，会按设计清理关联数据，详见 **USER_GUIDE**。
+
+**Q：从源码运行与 exe 数据是否共用？**  
+A：共用同一套 **LocalAppData** 数据目录（除非自行改代码中的数据路径逻辑）。
+
+**Q：存档管理里的备份 ZIP 放在哪里？**  
+A：默认在 **`%LOCALAPPDATA%\LocalGalgameManager\data\save-backups\<user_id>\<game_id>\`**。删除列表记录时会同时尝试删除对应 ZIP 文件。
+
+**Q：还原存档会不会把当前进度覆盖掉？**  
+A：会覆盖目标存档目录内容，但程序会在还原前自动再打包一份“还原前自动备份”，可用于回退。
+
+**Q：自动发现存档路径是怎么找的？**  
+A：优先按内置规则匹配常见目录（如 `save` / `SaveData` / `www/save`），再在游戏目录做限深启发式扫描；最终给出候选列表，由你确认后保存到 `custom_save_root`。
+
+**Q：备份校验失败为什么不让还原？**  
+A：当前策略是“安全优先”：若 SHA256 与记录不一致，会直接阻止还原，避免把损坏或被篡改的压缩包覆盖到当前存档。
 
 ---
 

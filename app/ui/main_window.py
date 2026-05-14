@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 import sys
 from collections.abc import Callable
+from datetime import datetime
 from functools import partial
 from pathlib import Path
 
@@ -12,7 +13,6 @@ from PySide6.QtGui import (
     QCloseEvent,
     QColor,
     QCursor,
-    QFontMetrics,
     QIcon,
     QLinearGradient,
     QPainter,
@@ -45,6 +45,7 @@ from PySide6.QtWidgets import (
     QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -53,11 +54,14 @@ from app.core.cover_manager import CoverManager
 from app.core.launcher import GameLauncher
 from app.core.scanner import GameScanner
 from app.data.database import Database, GameRecord, VndbImportRow
+from app.ui.game_card_widget import GameCardWidget
 from app.ui.game_detail_dialog import GameDetailDialog
+from app.ui.paged_game_grid import PagedGameGridView
 from app.ui.play_history_window import PlayHistoryWindow
 from app.plugins.manager import PluginManager
 from app.services.backup_service import BackupService
 from app.services.search_service import SearchService
+from app.services.save_archive_service import directory_has_files, sha256_file, zip_directory
 from app.services.system_service import SystemService
 from app.services.vndb_service import VndbOutcome, VndbService
 
@@ -247,189 +251,6 @@ class LocaleEmulatorSettingsDialog(QDialog):
 
     def leproc_path(self) -> str:
         return self._path.text().strip()
-
-
-class TwoLineElideLabel(QLabel):
-    def __init__(self, text: str = "", parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self._raw_text = text
-        self.setWordWrap(True)
-        self.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        self._line_height = self.fontMetrics().lineSpacing()
-        self.setMinimumHeight(self._line_height * 2)
-        self.setMaximumHeight(self._line_height * 2 + 4)
-        self.setText(text)
-
-    def setText(self, text: str) -> None:
-        self._raw_text = text
-        super().setText(self._build_two_line_elided_text())
-        self.setToolTip(text)
-
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        super().setText(self._build_two_line_elided_text())
-
-    def _build_two_line_elided_text(self) -> str:
-        text = self._raw_text.strip()
-        if not text:
-            return ""
-        width = max(80, self.contentsRect().width() - 2)
-        metrics = QFontMetrics(self.font())
-        first_line = ""
-        second_line = ""
-        idx = 0
-        for idx, ch in enumerate(text):
-            trial = first_line + ch
-            if metrics.horizontalAdvance(trial) > width:
-                break
-            first_line = trial
-        else:
-            return text
-        remaining = text[idx:]
-        for ch in remaining:
-            trial = second_line + ch
-            if metrics.horizontalAdvance(trial) > width:
-                second_line = metrics.elidedText(second_line + ch, Qt.ElideRight, width)
-                break
-            second_line = trial
-        if not second_line:
-            second_line = metrics.elidedText(remaining, Qt.ElideRight, width)
-        return f"{first_line}\n{second_line}"
-
-
-class GameCardWidget(QWidget):
-    retry_cover_requested = Signal(int)
-
-    def __init__(self, game: GameRecord, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self._game = game
-        self._retry_emitted = False
-        self._force_no_cover = False
-        self._retry_timer = QTimer(self)
-        self._retry_timer.setSingleShot(True)
-        self._retry_timer.timeout.connect(self._emit_retry_request)
-        root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(4)
-
-        self.cover = QLabel()
-        self.cover.setObjectName("gameCover")
-        # Use near 2:3 portrait slot to better fit VNDB/Bangumi covers.
-        self.cover.setFixedSize(168, 252)
-        self.cover.setAlignment(Qt.AlignCenter)
-        self._apply_cover(game.cover_path, game.image_url)
-        root.addWidget(self.cover, 0, Qt.AlignHCenter)
-
-        text_widget = QWidget()
-        text_widget.setObjectName("gameTextBlock")
-        text_col = QVBoxLayout()
-        text_widget.setLayout(text_col)
-        text_col.setContentsMargins(0, 0, 0, 0)
-        text_col.setContentsMargins(10, 6, 10, 10)
-        text_col.setSpacing(3)
-        self.title = TwoLineElideLabel(game.name)
-        self.title.setObjectName("gameTitle")
-        text_col.addWidget(self.title, 1)
-
-        meta_row = QHBoxLayout()
-        meta_row.setContentsMargins(0, 0, 0, 0)
-        meta_row.setSpacing(6)
-        meta_row.addStretch(1)
-        self.play_count = QLabel(f"🎮 × {game.play_count}")
-        self.play_count.setObjectName("gameMeta")
-        self.play_count.setAlignment(Qt.AlignRight | Qt.AlignBottom)
-        source = self._cover_source_label(game.cover_path, game.image_url)
-        self.cover_source = QLabel(source)
-        self.cover_source.setObjectName("gameMetaSource")
-        self.cover_source.setAlignment(Qt.AlignLeft | Qt.AlignBottom)
-        meta_row.addWidget(self.cover_source)
-        meta_row.addStretch(1)
-        meta_row.addWidget(self.play_count)
-        text_col.addLayout(meta_row)
-        root.addWidget(text_widget, 1)
-
-    def _apply_cover(self, cover_path: str | None, image_url: str | None = None) -> None:
-        # Show a deterministic state before trying actual image loading.
-        self.cover.setPixmap(self._build_placeholder_cover("加载中"))
-        if cover_path:
-            path = Path(cover_path)
-            if path.exists():
-                pix = QPixmap(str(path))
-                if not pix.isNull():
-                    scaled = self._scale_and_center_crop(pix, self.cover.size())
-                    self.cover.setPixmap(self._with_bottom_gradient(scaled))
-                    return
-        # IMPORTANT: never request network images on UI thread.
-        # VNDB images should be pre-cached by worker threads during import.
-        # If cache is missing, keep placeholder to avoid UI freeze.
-        if image_url and image_url.startswith(("http://", "https://")):
-            if self._force_no_cover:
-                self.cover.setPixmap(self._build_placeholder_cover("NO COVER"))
-                return
-            self.cover.setPixmap(self._build_placeholder_cover("等待缓存"))
-            if not self._retry_emitted:
-                self._retry_emitted = True
-                self._retry_timer.start(120)
-            return
-        self.cover.setPixmap(self._build_placeholder_cover("NO COVER"))
-
-    def force_no_cover_placeholder(self) -> None:
-        self._force_no_cover = True
-        self._apply_cover(self._game.cover_path, self._game.image_url)
-
-    def _emit_retry_request(self) -> None:
-        self.retry_cover_requested.emit(self._game.id)
-
-    def _scale_and_center_crop(self, source: QPixmap, target_size: QSize) -> QPixmap:
-        """Scale to cover target rect, then crop center region."""
-        target_w = max(1, target_size.width())
-        target_h = max(1, target_size.height())
-        expanded = source.scaled(
-            QSize(target_w, target_h),
-            Qt.KeepAspectRatioByExpanding,
-            Qt.SmoothTransformation,
-        )
-        crop_x = max(0, (expanded.width() - target_w) // 2)
-        crop_y = max(0, (expanded.height() - target_h) // 2)
-        return expanded.copy(crop_x, crop_y, target_w, target_h)
-
-    def _build_placeholder_cover(self, label: str = "NO COVER") -> QPixmap:
-        size = self.cover.size()
-        pix = QPixmap(size)
-        pix.fill(QColor("#252C36"))
-        painter = QPainter(pix)
-        painter.setRenderHint(QPainter.Antialiasing)
-        painter.setPen(QPen(QColor("#465061"), 1))
-        painter.drawRect(0, 0, size.width() - 1, size.height() - 1)
-        painter.setPen(QPen(QColor("#90A0B8"), 1))
-        painter.drawText(pix.rect(), Qt.AlignCenter, label)
-        painter.end()
-        return self._with_bottom_gradient(pix)
-
-    def _with_bottom_gradient(self, pixmap: QPixmap) -> QPixmap:
-        output = QPixmap(pixmap)
-        painter = QPainter(output)
-        gradient = QLinearGradient(0, 0, 0, output.height())
-        gradient.setColorAt(0.0, QColor(0, 0, 0, 0))
-        gradient.setColorAt(0.75, QColor(0, 0, 0, 45))
-        gradient.setColorAt(1.0, QColor(0, 0, 0, 85))
-        painter.fillRect(output.rect(), gradient)
-        painter.end()
-        return output
-
-    def _cover_source_label(self, cover_path: str | None, image_url: str | None = None) -> str:
-        if not cover_path and image_url:
-            return "VNDB"
-        if not cover_path:
-            return "默认"
-        normalized = cover_path.replace("\\", "/").lower()
-        if normalized.startswith("http://") or normalized.startswith("https://"):
-            return "VNDB"
-        if "/covers/vndb/" in normalized:
-            return "VNDB"
-        if "/covers/online/" in normalized:
-            return "在线"
-        return "本地"
 
 
 class ScanWorker(QObject):
@@ -791,6 +612,7 @@ class MainWindow(QMainWindow):
         self.plugin_manager.load_all(disabled_plugins=self._disabled_plugins)
         self.cover_fetch_mode = self.db.get_cover_fetch_mode()
         self.cover_manager.cover_fetch_mode = self.cover_fetch_mode
+        self.auto_backup_before_launch = self.db.get_auto_backup_before_launch()
 
         self.games_cache: list[GameRecord] = []
         self.filtered_games: list[GameRecord] = []
@@ -948,11 +770,18 @@ class MainWindow(QMainWindow):
         self.btn_startup.setToolTip("是否随 Windows 登录自动启动本程序")
         lay_sys.addWidget(self.btn_startup)
         self._polish_toolbar_control(self.btn_startup)
+        self.btn_auto_backup_launch = QPushButton("")
+        self.btn_auto_backup_launch.setCheckable(True)
+        self.btn_auto_backup_launch.clicked.connect(self._toggle_auto_backup_before_launch)
+        self.btn_auto_backup_launch.setToolTip("启动游戏前自动备份已配置的存档目录")
+        lay_sys.addWidget(self.btn_auto_backup_launch)
+        self._polish_toolbar_control(self.btn_auto_backup_launch)
+        self._apply_auto_backup_launch_ui()
 
         self.btn_more = QToolButton()
         self.btn_more.setText("更多")
         self.btn_more.setPopupMode(QToolButton.InstantPopup)
-        self.btn_more.setToolTip("备份、恢复、插件等不常用功能")
+        self.btn_more.setToolTip("备份、恢复、插件、Locale Emulator、2DFan 线索库等不常用功能")
         self._polish_toolbar_control(self.btn_more)
         more_menu = QMenu(self.btn_more)
         act_backup = QAction("导出备份", self)
@@ -978,6 +807,13 @@ class MainWindow(QMainWindow):
         act_le.triggered.connect(self._open_locale_emulator_settings)
         act_le.setToolTip("配置 LEProc.exe，用于「LE 转区启动」Galgame")
         more_menu.addAction(act_le)
+        more_menu.addSeparator()
+        act_twodfan = QAction("2DFan 线索库与爬虫…", self)
+        act_twodfan.triggered.connect(self._open_twodfan_library_dialog)
+        act_twodfan.setToolTip(
+            "配置本仓库 tools/2dfan-save-crawler 生成的 SQLite；存档管理「自动发现」会合并其中的路径线索"
+        )
+        more_menu.addAction(act_twodfan)
         self.btn_more.setMenu(more_menu)
         lay_sys.addWidget(self.btn_more)
         row_secondary.addWidget(wrap_sys, 0)
@@ -991,18 +827,29 @@ class MainWindow(QMainWindow):
         self.empty_hint.setAlignment(Qt.AlignCenter)
         root.addWidget(self.empty_hint)
 
+        self._library_stack = QStackedWidget()
+        self._game_paged_grid = PagedGameGridView(self)
+        self._game_paged_grid.selection_changed.connect(self._show_selected)
+        self._game_paged_grid.double_clicked.connect(
+            lambda gid: self.launch_game_by_id(gid, message_parent=self)
+        )
+        self._game_paged_grid.context_menu_requested.connect(self._open_game_context_menu_by_id)
+
         self.games_list = QListWidget()
         self.games_list.itemSelectionChanged.connect(self._show_selected)
         self.games_list.itemDoubleClicked.connect(lambda _item: self._launch_selected())
         self.games_list.setContextMenuPolicy(Qt.CustomContextMenu)
         self.games_list.customContextMenuRequested.connect(self._show_game_context_menu)
-        root.addWidget(self.games_list, 1)
         self.games_list.setToolTip("右键游戏可执行启动、修正、收藏等操作")
         self.games_list.setViewMode(QListView.IconMode)
         self.games_list.setGridSize(QSize(380, 364))
         self.games_list.setWordWrap(True)
         self.games_list.setSpacing(24)
         self.games_list.setUniformItemSizes(False)
+
+        self._library_stack.addWidget(self._game_paged_grid)
+        self._library_stack.addWidget(self.games_list)
+        root.addWidget(self._library_stack, 1)
 
         actions = QHBoxLayout()
         actions.addStretch(1)
@@ -1438,9 +1285,26 @@ class MainWindow(QMainWindow):
             query=self.search_input.text(),
             only_favorite=self.favorite_only.isChecked(),
         )
-        self._start_incremental_render()
+        self._refresh_library_view()
         self._update_empty_state()
         self._update_action_state()
+
+    def _refresh_library_view(self) -> None:
+        if self._is_grid_view:
+            if self._render_timer.isActive():
+                self._render_timer.stop()
+            self.games_list.clear()
+            self._library_stack.setCurrentWidget(self._game_paged_grid)
+            self._game_paged_grid.set_games(
+                self.filtered_games,
+                cover_retry_failed=self._cover_retry_failed,
+                on_retry_cover=lambda gid: self._request_cover_refetch(gid, user_triggered=False),
+            )
+            n = len(self.filtered_games)
+            self.status.setText(f"共 {n} / {len(self.games_cache)} 个游戏")
+        else:
+            self._library_stack.setCurrentWidget(self.games_list)
+            self._start_incremental_render()
 
     def _start_incremental_render(self) -> None:
         if self._render_timer.isActive():
@@ -1462,10 +1326,7 @@ class MainWindow(QMainWindow):
         for idx in range(self._render_index, end):
             game = self.filtered_games[idx]
             item = QListWidgetItem()
-            if self._is_grid_view:
-                item.setSizeHint(QSize(340, 346))
-            else:
-                item.setSizeHint(QSize(300, 320))
+            item.setSizeHint(QSize(300, 320))
             item.setData(Qt.UserRole, game.id)
             self.games_list.addItem(item)
             card = GameCardWidget(game)
@@ -1483,6 +1344,14 @@ class MainWindow(QMainWindow):
             self.status.setText(f"共 {self._render_total} / {len(self.games_cache)} 个游戏")
 
     def _selected_game(self) -> GameRecord | None:
+        if self._is_grid_view:
+            gid = self._game_paged_grid.selected_game_id()
+            if gid is None:
+                return None
+            for g in self.filtered_games:
+                if g.id == gid:
+                    return g
+            return None
         index = self.games_list.currentRow()
         if index < 0:
             return None
@@ -1540,6 +1409,12 @@ class MainWindow(QMainWindow):
         self.db.set_locale_emulator_leproc_path(path)
         self.status.setText("已保存 Locale Emulator 路径" if path else "已清除 Locale Emulator 配置")
 
+    def _open_twodfan_library_dialog(self) -> None:
+        from app.ui.twodfan_library_dialog import TwodfanLibraryDialog
+
+        dlg = TwodfanLibraryDialog(self)
+        dlg.exec()
+
     def launch_game_by_id(
         self,
         game_id: int,
@@ -1569,6 +1444,8 @@ class MainWindow(QMainWindow):
                     self._open_locale_emulator_settings()
                 return
         le_path = self.db.get_locale_emulator_leproc_path().strip() if locale_emulator else ""
+        if self.auto_backup_before_launch:
+            self._auto_backup_save_before_launch(game)
         uid = self.current_user_id
         self.status.setText(
             f"正在通过 LE 启动: {game.name}…" if locale_emulator else f"正在启动: {game.name}…"
@@ -1722,6 +1599,11 @@ class MainWindow(QMainWindow):
     def open_game_detail(self, game_id: int) -> None:
         GameDetailDialog(self, game_id).exec()
 
+    def open_save_manager(self, game_id: int) -> None:
+        from app.ui.save_manager_window import SaveManagerWindow
+
+        SaveManagerWindow(self, game_id).show()
+
     def _open_selected_game_detail(self) -> None:
         game = self._selected_game()
         if game is None:
@@ -1837,6 +1719,57 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.critical(self, "设置失败", str(exc))
 
+    def _apply_auto_backup_launch_ui(self) -> None:
+        enabled = bool(self.auto_backup_before_launch)
+        self.btn_auto_backup_launch.setChecked(enabled)
+        self.btn_auto_backup_launch.setText(
+            f"启动前备份: {'ON' if enabled else 'OFF'}"
+        )
+        self.btn_auto_backup_launch.setProperty("active", enabled)
+        self.btn_auto_backup_launch.style().unpolish(self.btn_auto_backup_launch)
+        self.btn_auto_backup_launch.style().polish(self.btn_auto_backup_launch)
+
+    def _toggle_auto_backup_before_launch(self) -> None:
+        self.auto_backup_before_launch = not self.auto_backup_before_launch
+        self.db.set_auto_backup_before_launch(self.auto_backup_before_launch)
+        self._apply_auto_backup_launch_ui()
+        self.status.setText(
+            "已开启启动前自动备份存档" if self.auto_backup_before_launch else "已关闭启动前自动备份存档"
+        )
+
+    def _auto_backup_save_before_launch(self, game: GameRecord) -> None:
+        raw = (game.custom_save_root or "").strip()
+        if not raw:
+            return
+        save_root = Path(raw)
+        if not save_root.is_dir() or not directory_has_files(save_root):
+            return
+        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_dir = (
+            self.db.base_dir
+            / "save-backups"
+            / str(self.current_user_id)
+            / str(game.id)
+        )
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        zip_path = backup_dir / f"{stamp}_auto_launch.zip"
+        try:
+            size = zip_directory(save_root, zip_path)
+            checksum = sha256_file(zip_path)
+            label = f"启动前自动备份 {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+            self.db.insert_save_backup(
+                self.current_user_id,
+                game.id,
+                label,
+                str(zip_path.resolve()),
+                size,
+                checksum_sha256=checksum,
+            )
+        except OSError as exc:
+            logging.getLogger(__name__).warning(
+                "auto backup before launch failed game_id=%s err=%s", game.id, exc
+            )
+
     def _setup_shortcuts(self) -> None:
         launch_action = QAction(self)
         launch_action.setShortcut("Return")
@@ -1932,6 +1865,12 @@ class MainWindow(QMainWindow):
             game_id = int(raw)
         except (TypeError, ValueError):
             return
+        self._exec_game_context_menu_for_id(game_id, QCursor.pos())
+
+    def _open_game_context_menu_by_id(self, game_id: int, global_pos: QPoint) -> None:
+        self._exec_game_context_menu_for_id(game_id, global_pos)
+
+    def _exec_game_context_menu_for_id(self, game_id: int, menu_anchor: QPoint | None = None) -> None:
         game = self.db.get_game_by_id(self.current_user_id, game_id)
         if game is None:
             QMessageBox.warning(
@@ -1978,6 +1917,12 @@ class MainWindow(QMainWindow):
         detail_action = menu.addAction("游戏详情…")
         detail_action.triggered.connect(lambda checked=False, gid=game.id: self.open_game_detail(gid))
         detail_action.setToolTip("查看简介、评分、游玩记录、调试信息与快捷操作")
+
+        save_mgr_action = menu.addAction("存档管理…")
+        save_mgr_action.triggered.connect(lambda checked=False, gid=game.id: self.open_save_manager(gid))
+        save_mgr_action.setToolTip(
+            "指定存档目录、备份与还原 ZIP；可配置 2DFan 线索库并在自动发现中合并社区路径"
+        )
 
         menu.addSeparator()
 
@@ -2026,7 +1971,7 @@ class MainWindow(QMainWindow):
         )
         assign_action.setToolTip("将当前游戏加入一个或多个分类")
 
-        menu.exec(QCursor.pos())
+        menu.exec(menu_anchor if menu_anchor is not None else QCursor.pos())
 
     def _toggle_view_mode(self) -> None:
         self._is_grid_view = not self._is_grid_view
@@ -2035,10 +1980,6 @@ class MainWindow(QMainWindow):
         self.btn_toggle_view.style().unpolish(self.btn_toggle_view)
         self.btn_toggle_view.style().polish(self.btn_toggle_view)
         if self._is_grid_view:
-            self.games_list.setViewMode(QListView.IconMode)
-            self.games_list.setGridSize(QSize(380, 364))
-            self.games_list.setWordWrap(True)
-            self.games_list.setSpacing(24)
             self.btn_toggle_view.setText("网格视图")
         else:
             self.games_list.setViewMode(QListView.ListMode)
@@ -2049,7 +1990,7 @@ class MainWindow(QMainWindow):
         self._apply_filters()
 
     def _update_empty_state(self) -> None:
-        has_games = self.games_list.count() > 0
+        has_games = len(self.filtered_games) > 0
         self.empty_hint.setVisible(not has_games)
         if has_games:
             self._highlight_timer.stop()
@@ -2060,7 +2001,7 @@ class MainWindow(QMainWindow):
             self._highlight_timer.start()
 
     def _pulse_add_root_button(self) -> None:
-        if self.games_list.count() > 0:
+        if len(self.filtered_games) > 0:
             return
         self._highlight_phase = not self._highlight_phase
         self.btn_add_root.setProperty("highlighted", self._highlight_phase)
@@ -2086,7 +2027,10 @@ class MainWindow(QMainWindow):
         self.btn_refresh.setEnabled(True)
         self.btn_game_detail.setEnabled(has_selection)
         if has_selection:
-            self.games_list.setFocus()
+            if self._is_grid_view:
+                self._game_paged_grid.set_focus_chain()
+            else:
+                self.games_list.setFocus()
 
     def _apply_styles(self) -> None:
         self.setStyleSheet(
@@ -2191,6 +2135,22 @@ class MainWindow(QMainWindow):
             QLabel#gameMetaSource {
                 color: #7FA7D9;
                 font-size: 10px;
+            }
+            QFrame#gameCardSlot {
+                background: #2C3138;
+                border: 1px solid #3A4250;
+                border-radius: 10px;
+            }
+            QFrame#gameCardSlot:hover {
+                border: 2px solid #7FA7D9;
+            }
+            QFrame#gameCardSlot[selected="true"] {
+                background: #3B4A66;
+                border: 2px solid #7597CC;
+            }
+            QLabel#gridPageLabel {
+                color: #93A1B6;
+                font-size: 12px;
             }
             QWidget#gameTextBlock {
                 background: #282F39;

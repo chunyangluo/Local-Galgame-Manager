@@ -30,6 +30,21 @@ class GameRecord:
     image_url: str | None = None
     screenshots_json: str | None = None
     source: str | None = None
+    custom_save_root: str | None = None
+
+
+@dataclass
+class SaveBackupRecord:
+    """User-created or auto restore-guard save archive."""
+
+    id: int
+    user_id: int
+    game_id: int
+    label: str
+    zip_path: str
+    created_at: str
+    size_bytes: int
+    checksum_sha256: str | None = None
 
 
 @dataclass
@@ -172,6 +187,7 @@ class Database:
         )
         self._ensure_games_columns()
         self._ensure_settings_columns()
+        self._ensure_save_backup_schema()
         self.conn.commit()
 
     def _ensure_games_columns(self) -> None:
@@ -207,6 +223,34 @@ class Database:
         self.conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_games_vndb_id ON games(vndb_id)"
         )
+        if "custom_save_root" not in cols:
+            self.conn.execute("ALTER TABLE games ADD COLUMN custom_save_root TEXT")
+
+    def _ensure_save_backup_schema(self) -> None:
+        self.conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS save_backups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                game_id INTEGER NOT NULL,
+                label TEXT NOT NULL,
+                zip_path TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                size_bytes INTEGER NOT NULL DEFAULT 0,
+                checksum_sha256 TEXT,
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY(game_id) REFERENCES games(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_save_backups_user_game
+            ON save_backups(user_id, game_id);
+            """
+        )
+        cols = {
+            str(row["name"])
+            for row in self.conn.execute("PRAGMA table_info(save_backups)").fetchall()
+        }
+        if "checksum_sha256" not in cols:
+            self.conn.execute("ALTER TABLE save_backups ADD COLUMN checksum_sha256 TEXT")
 
     def _promote_legacy_custom_covers(self) -> None:
         """Promote old user-imported covers to custom override field.
@@ -254,6 +298,14 @@ class Database:
         if "locale_emulator_leproc_path" not in cols:
             self.conn.execute(
                 "ALTER TABLE settings ADD COLUMN locale_emulator_leproc_path TEXT DEFAULT ''"
+            )
+        if "auto_backup_before_launch" not in cols:
+            self.conn.execute(
+                "ALTER TABLE settings ADD COLUMN auto_backup_before_launch INTEGER DEFAULT 0"
+            )
+        if "twodfan_hints_db_path" not in cols:
+            self.conn.execute(
+                "ALTER TABLE settings ADD COLUMN twodfan_hints_db_path TEXT DEFAULT ''"
             )
 
     def ensure_default_user(self) -> int:
@@ -355,6 +407,40 @@ class Database:
         normalized = path.strip()
         self.conn.execute(
             "UPDATE settings SET locale_emulator_leproc_path = ?, updated_at = ? WHERE id = 1",
+            (normalized, datetime.utcnow().isoformat()),
+        )
+        self.conn.commit()
+
+    def get_auto_backup_before_launch(self) -> bool:
+        row = self.conn.execute(
+            "SELECT auto_backup_before_launch FROM settings WHERE id = 1"
+        ).fetchone()
+        if row is None:
+            return False
+        try:
+            return bool(int(row["auto_backup_before_launch"] or 0))
+        except (TypeError, ValueError):
+            return False
+
+    def set_auto_backup_before_launch(self, enabled: bool) -> None:
+        self.conn.execute(
+            "UPDATE settings SET auto_backup_before_launch = ?, updated_at = ? WHERE id = 1",
+            (1 if enabled else 0, datetime.utcnow().isoformat()),
+        )
+        self.conn.commit()
+
+    def get_twodfan_hints_db_path(self) -> str:
+        row = self.conn.execute(
+            "SELECT twodfan_hints_db_path FROM settings WHERE id = 1"
+        ).fetchone()
+        if row is None or row["twodfan_hints_db_path"] is None:
+            return ""
+        return str(row["twodfan_hints_db_path"]).strip()
+
+    def set_twodfan_hints_db_path(self, path: str) -> None:
+        normalized = path.strip()
+        self.conn.execute(
+            "UPDATE settings SET twodfan_hints_db_path = ?, updated_at = ? WHERE id = 1",
             (normalized, datetime.utcnow().isoformat()),
         )
         self.conn.commit()
@@ -467,7 +553,8 @@ class Database:
                 g.languages,
                 g.image_url,
                 g.screenshots_json,
-                g.source
+                g.source,
+                NULLIF(TRIM(g.custom_save_root), '') AS custom_save_root
             FROM games g
             WHERE g.root_dir = ?
             """,
@@ -496,6 +583,7 @@ class Database:
             image_url=row["image_url"],
             screenshots_json=row["screenshots_json"],
             source=row["source"],
+            custom_save_root=row["custom_save_root"],
         )
 
     def update_game_identity(self, game_id: int, name: str, launch_exe: str) -> None:
@@ -558,6 +646,7 @@ class Database:
                 g.image_url,
                 g.screenshots_json,
                 g.source,
+                NULLIF(TRIM(g.custom_save_root), '') AS custom_save_root,
                 CASE WHEN f.game_id IS NULL THEN 0 ELSE 1 END AS favorite,
                 COALESCE(GROUP_CONCAT(c.name, ','), '') AS categories,
                 MAX(p.started_at) AS last_played_at,
@@ -595,6 +684,7 @@ class Database:
                 image_url=r["image_url"],
                 screenshots_json=r["screenshots_json"],
                 source=r["source"],
+                custom_save_root=r["custom_save_root"],
             )
             for r in rows
         ]
@@ -724,7 +814,8 @@ class Database:
             SELECT
                 name, launch_exe, custom_name, custom_launch_exe,
                 cover_path, custom_cover_path, root_dir, vndb_id,
-                image_url, source, created_at, updated_at
+                image_url, source, created_at, updated_at,
+                custom_save_root
             FROM games
             WHERE id = ?
             """,
@@ -817,3 +908,111 @@ class Database:
         self.conn.execute("DELETE FROM games")
         self.conn.commit()
         return count
+
+    def set_game_custom_save_root(self, game_id: int, path: str | None) -> None:
+        now = datetime.utcnow().isoformat()
+        normalized = (path or "").strip() or None
+        self.conn.execute(
+            "UPDATE games SET custom_save_root = ?, updated_at = ? WHERE id = ?",
+            (normalized, now, game_id),
+        )
+        self.conn.commit()
+
+    def list_save_backups(self, user_id: int, game_id: int) -> list[SaveBackupRecord]:
+        rows = self.conn.execute(
+            """
+            SELECT id, user_id, game_id, label, zip_path, created_at, size_bytes, checksum_sha256
+            FROM save_backups
+            WHERE user_id = ? AND game_id = ?
+            ORDER BY datetime(created_at) DESC, id DESC
+            """,
+            (user_id, game_id),
+        ).fetchall()
+        return [
+            SaveBackupRecord(
+                id=int(r["id"]),
+                user_id=int(r["user_id"]),
+                game_id=int(r["game_id"]),
+                label=str(r["label"]),
+                zip_path=str(r["zip_path"]),
+                created_at=str(r["created_at"]),
+                size_bytes=int(r["size_bytes"] or 0),
+                checksum_sha256=(str(r["checksum_sha256"]) if r["checksum_sha256"] else None),
+            )
+            for r in rows
+        ]
+
+    def insert_save_backup(
+        self,
+        user_id: int,
+        game_id: int,
+        label: str,
+        zip_path: str,
+        size_bytes: int,
+        *,
+        checksum_sha256: str | None = None,
+    ) -> int:
+        now = datetime.utcnow().isoformat()
+        cur = self.conn.execute(
+            """
+            INSERT INTO save_backups (
+                user_id, game_id, label, zip_path, created_at, size_bytes, checksum_sha256
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                user_id,
+                game_id,
+                label.strip() or "备份",
+                zip_path,
+                now,
+                size_bytes,
+                (checksum_sha256.strip().lower() if checksum_sha256 else None),
+            ),
+        )
+        self.conn.commit()
+        return int(cur.lastrowid)
+
+    def update_save_backup_label(self, user_id: int, backup_id: int, label: str) -> bool:
+        cur = self.conn.execute(
+            "UPDATE save_backups SET label = ? WHERE id = ? AND user_id = ?",
+            (label.strip() or "备份", backup_id, user_id),
+        )
+        self.conn.commit()
+        return (cur.rowcount or 0) > 0
+
+    def delete_save_backup_row(self, user_id: int, backup_id: int) -> str | None:
+        row = self.conn.execute(
+            "SELECT zip_path FROM save_backups WHERE id = ? AND user_id = ?",
+            (backup_id, user_id),
+        ).fetchone()
+        if row is None:
+            return None
+        zp = str(row["zip_path"])
+        self.conn.execute(
+            "DELETE FROM save_backups WHERE id = ? AND user_id = ?",
+            (backup_id, user_id),
+        )
+        self.conn.commit()
+        return zp
+
+    def get_save_backup(self, user_id: int, backup_id: int) -> SaveBackupRecord | None:
+        row = self.conn.execute(
+            """
+            SELECT id, user_id, game_id, label, zip_path, created_at, size_bytes, checksum_sha256
+            FROM save_backups WHERE id = ? AND user_id = ?
+            """,
+            (backup_id, user_id),
+        ).fetchone()
+        if row is None:
+            return None
+        return SaveBackupRecord(
+            id=int(row["id"]),
+            user_id=int(row["user_id"]),
+            game_id=int(row["game_id"]),
+            label=str(row["label"]),
+            zip_path=str(row["zip_path"]),
+            created_at=str(row["created_at"]),
+            size_bytes=int(row["size_bytes"] or 0),
+            checksum_sha256=(str(row["checksum_sha256"]) if row["checksum_sha256"] else None),
+        )

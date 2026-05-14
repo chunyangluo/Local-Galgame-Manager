@@ -186,6 +186,13 @@ class GameDetailDialog(QDialog):
         self._btn_custom_cover.clicked.connect(self._on_set_custom_cover)
         btn_row.addWidget(self._btn_custom_cover)
 
+        self._btn_save_mgr = QPushButton("存档管理…")
+        self._btn_save_mgr.setToolTip(
+            "指定存档目录、备份与还原 ZIP；可配置全局 2DFan 线索库并在「自动发现」中合并社区路径"
+        )
+        self._btn_save_mgr.clicked.connect(self._on_open_save_manager)
+        btn_row.addWidget(self._btn_save_mgr)
+
         self._btn_reload = QPushButton("刷新")
         self._btn_reload.clicked.connect(self.reload_from_db)
         btn_row.addWidget(self._btn_reload)
@@ -242,6 +249,7 @@ class GameDetailDialog(QDialog):
         lines.append(f"root_dir: {game.root_dir}")
         lines.append(f"launch_exe (effective): {game.launch_exe}")
         lines.append(f"cover_path (effective): {game.cover_path}")
+        lines.append(f"custom_save_root: {game.custom_save_root or '（未指定）'}")
         lines.append(f"vndb_id: {game.vndb_id}")
         lines.append(f"image_url: {game.image_url}")
         lines.append(f"source: {game.source}")
@@ -366,3 +374,6 @@ class GameDetailDialog(QDialog):
     def _on_set_custom_cover(self) -> None:
         if self._main.set_custom_cover_for_game_id(self._game_id):
             self.reload_from_db()
+
+    def _on_open_save_manager(self) -> None:
+        self._main.open_save_manager(self._game_id)

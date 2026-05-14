@@ -1,0 +1,4 @@
+# Local secrets (never commit browser cookies)
+data/cookies.txt
+data/*cookie*.txt
+*.secret

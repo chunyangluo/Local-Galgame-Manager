@@ -1,5 +1,12 @@
 # Changelog
 
+## v2.0.4
+- **存档管理 V2**：独立窗口支持指定 `custom_save_root`、异步 ZIP 备份/还原、进度条、`SHA256` 校验与「启动前自动备份」开关（设置写入数据库）。
+- **自动发现存档路径**：内置规则 + 启发式扫描；可选合并 **2DFan 线索库**（只读 SQLite，候选标记为 `[2DFan]`）。
+- **2DFan 集成**：设置项 `twodfan_hints_db_path`；主窗口「更多」→「2DFan 线索库与爬虫…」向导；存档管理内快捷配置与库统计；`app/paths.py` 检测仓库内爬虫目录。
+- **独立工具 `tools/2dfan-save-crawler`**：`dfan_save_crawler` CLI（init / crawl / export）、SQLite 表 `crawl_pages` / `save_hints`、请求限速、代理环境变量、`--cookie` / `--cookie-file`、首页预热与浏览器式请求头、403 调试提示；`scripts/configure_manager_twodfan.py` 一键写入管理器全局路径。
+- **文档**：`README.md`、`docs/USER_GUIDE.md` 补充存档与 2DFan 自建流程。
+
 ## v2.0.3
 - Fix persistent data reset issue by moving runtime data directory from `Path.cwd()/data` to `%LOCALAPPDATA%/LocalGalgameManager/data`.
 - Unify data-dir resolution for both GUI (`app.main`) and CLI (`app.cli`) to ensure consistent library/config loading across launch methods.
