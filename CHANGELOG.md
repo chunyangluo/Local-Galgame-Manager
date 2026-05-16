@@ -1,5 +1,12 @@
 # Changelog
 
+## v2.0.5
+- **扫描器修复**：修复 `_should_skip_directory` 路径误判 BUG，现在只检查目录名而非完整路径。
+- **测试覆盖**：新增 `test_cover_manager.py`、`test_vndb_service.py`、`test_search_service_full.py`，总计 136 个测试全部通过。
+- **覆盖率统计**：接入 pytest-cov，核心模块覆盖率：scanner 93%、cover_manager 82%、search_service 100%。
+- **CI/CD 配置**：添加 GitHub Actions 自动运行测试。
+- **架构优化**：拆分 `MainWindow`（1500 行）为 6 个职责清晰的 Mixin（ScanMixin、VndbImportMixin、CoverMixin、LaunchMixin、GameActionMixin、ViewMixin），提升代码可维护性。
+
 ## v2.0.4
 - **存档管理 V2**：独立窗口支持指定 `custom_save_root`、异步 ZIP 备份/还原、进度条、`SHA256` 校验与「启动前自动备份」开关（设置写入数据库）。
 - **自动发现存档路径**：内置规则 + 启发式扫描；可选合并 **2DFan 线索库**（只读 SQLite，候选标记为 `[2DFan]`）。

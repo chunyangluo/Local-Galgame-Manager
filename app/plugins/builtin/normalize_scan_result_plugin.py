@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import replace
-from typing import Any
 
+from app.core.scanner import ScanResult
 from app.plugins.base import PluginContext
 
 
@@ -10,9 +10,9 @@ class NormalizeScanResultPlugin:
     name = "normalize_scan_result"
 
     def transform_scan_results(
-        self, *, root: str, results: list[Any], context: PluginContext
-    ) -> list[Any]:
-        normalized: list[Any] = []
+        self, *, root: str, results: list[ScanResult], context: PluginContext
+    ) -> list[ScanResult]:
+        normalized: list[ScanResult] = []
         seen: set[tuple[str, str]] = set()
         for item in results:
             game_name = str(getattr(item, "game_name", "")).strip()
@@ -37,4 +37,3 @@ class NormalizeScanResultPlugin:
 
 def register() -> NormalizeScanResultPlugin:
     return NormalizeScanResultPlugin()
-

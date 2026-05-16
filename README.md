@@ -1,5 +1,7 @@
 # Local Galgame Manager
 
+**版本**: v2.0.5 | [下载](https://github.com/chunyangluo/Local-Galgame-Manager/releases/tag/v2.0.5)
+
 <p align="center">
   <img src="docs/assets/main-window.png" alt="Local Galgame Manager 主界面" width="820" />
 </p>
@@ -79,7 +81,31 @@
 - Python 3.12+（开发与 CI/打包）
 - PySide6（Qt6）、SQLite（`sqlite3`）
 - PyInstaller（Windows 可执行文件）
+- pytest + pytest-cov（测试与覆盖率）
+- GitHub Actions（CI/CD）
 - 其余依赖见 **`requirements.txt`**
+
+### 架构设计
+
+**主窗口拆分**：`MainWindow`（原 1500+ 行）拆分为 6 个职责清晰的 Mixin：
+
+| Mixin | 职责 |
+|-------|------|
+| `scan_mixin.py` | 扫描目录管理、扫描执行/进度/取消 |
+| `vndb_import_mixin.py` | VNDB/Bangumi 批量导入 |
+| `cover_mixin.py` | 封面获取/重试/策略切换 |
+| `launch_mixin.py` | 游戏启动/LE转区/启动后记录 |
+| `game_action_mixin.py` | 右键菜单、收藏、编辑、分类、备份等 |
+| `view_mixin.py` | 视图切换、筛选、渲染、空状态 |
+
+### 测试覆盖
+
+- **测试总数**：136 个单元测试
+- **核心模块覆盖率**：
+  - scanner: 93%
+  - cover_manager: 82%
+  - search_service: 100%
+  - database: 68%
 
 ---
 

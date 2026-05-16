@@ -1,4 +1,3 @@
-from app.plugins.manager import PluginManager
+from app.plugins.manager import PluginManager, PluginLoadInfo, PluginLoadStatus
 
-__all__ = ["PluginManager"]
-
+__all__ = ["PluginManager", "PluginLoadInfo", "PluginLoadStatus"]

@@ -216,10 +216,10 @@ class GameScanner:
         return scored[0][1]
 
     def _should_skip_directory(self, directory: Path) -> bool:
-        lower_path = str(directory).lower()
-        if directory.name.strip().lower() in SKIP_DIRECTORY_NAMES:
+        lower_name = directory.name.strip().lower()
+        if lower_name in SKIP_DIRECTORY_NAMES:
             return True
-        return any(token in lower_path for token in SKIP_DIRECTORY_KEYWORDS)
+        return any(token in lower_name for token in SKIP_DIRECTORY_KEYWORDS)
 
     def _normalize_name(self, value: str) -> str:
         return re.sub(r"[^a-z0-9\u4e00-\u9fff\u3040-\u30ff]+", "", value.lower())
