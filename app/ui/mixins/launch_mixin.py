@@ -5,7 +5,7 @@ import sys
 from pathlib import Path
 
 from PySide6.QtCore import QThreadPool, Qt
-from PySide6.QtWidgets import QApplication, QMessageBox, QPushButton
+from PySide6.QtWidgets import QApplication, QMessageBox
 
 from app.workers import LaunchGameTask
 
@@ -17,8 +17,7 @@ class LaunchMixin:
     current_user_id: int
     auto_backup_before_launch: bool
     status: object
-    _is_launching: bool = False
-    _launching_game_id: int | None = None
+    _launching_game_ids: set[int] = set()
 
     def is_locale_emulator_usable(self) -> bool:
         if sys.platform != "win32":
@@ -29,19 +28,23 @@ class LaunchMixin:
         path = Path(p)
         return path.is_file() and path.name.lower() == "leproc.exe"
 
-    def _set_launching(self, is_launching: bool, game_id: int | None = None) -> None:
-        self._is_launching = is_launching
-        self._launching_game_id = game_id if is_launching else None
+    def _is_game_launching(self, game_id: int) -> bool:
+        return game_id in self._launching_game_ids
+
+    def _add_launching_game(self, game_id: int) -> None:
+        self._launching_game_ids.add(game_id)
+        self._update_launch_buttons()
+
+    def _remove_launching_game(self, game_id: int) -> None:
+        self._launching_game_ids.discard(game_id)
         self._update_launch_buttons()
 
     def _update_launch_buttons(self) -> None:
-        if hasattr(self, "btn_start") and self.btn_start:
-            self.btn_start.setDisabled(self._is_launching)
-            self.btn_start.setText("启动中..." if self._is_launching else "启动")
+        has_launching = bool(self._launching_game_ids)
         if hasattr(self, "games_list") and self.games_list:
-            self.games_list.setDisabled(self._is_launching)
+            self.games_list.setDisabled(False)
         if hasattr(self, "_game_paged_grid") and self._game_paged_grid:
-            self._game_paged_grid.setDisabled(self._is_launching)
+            self._game_paged_grid.setDisabled(False)
 
     def launch_game_by_id(
         self,
@@ -51,8 +54,8 @@ class LaunchMixin:
         locale_emulator: bool = False,
         message_parent=None,
     ) -> None:
-        if self._is_launching:
-            self.status.setText("游戏正在启动中，请稍候...")
+        if self._is_game_launching(game_id):
+            self.status.setText("该游戏正在启动中，请勿重复点击")
             return
 
         from PySide6.QtWidgets import QWidget
@@ -81,7 +84,7 @@ class LaunchMixin:
         if self.auto_backup_before_launch:
             self._auto_backup_save_before_launch(game)
         uid = self.current_user_id
-        self._set_launching(True, game.id)
+        self._add_launching_game(game.id)
         self.status.setText(
             f"正在通过 LE 启动: {game.name}…" if locale_emulator else f"正在启动: {game.name}…"
         )
@@ -124,7 +127,7 @@ class LaunchMixin:
         duration: int,
         game_name: str,
     ) -> None:
-        self._set_launching(False)
+        self._remove_launching_game(game_id)
         parent = self._message_box_parent(message_parent)
         try:
             self.db.record_play(user_id, game_id, duration)
@@ -135,17 +138,18 @@ class LaunchMixin:
             QMessageBox.critical(parent, "记录游玩失败", str(exc))
 
     def _on_game_launch_failed(self, message_parent, message: str) -> None:
-        self._set_launching(False)
+        for gid in list(self._launching_game_ids):
+            self._remove_launching_game(gid)
         parent = self._message_box_parent(message_parent)
         self.status.setText("启动失败")
         QMessageBox.critical(parent, "启动失败", message)
 
     def _launch_selected(self, as_admin: bool = False) -> None:
-        if self._is_launching:
-            self.status.setText("游戏正在启动中，请稍候...")
-            return
         game = self._selected_game()
         if game is None:
+            return
+        if self._is_game_launching(game.id):
+            self.status.setText("该游戏正在启动中，请勿重复点击")
             return
         self.launch_game_by_id(game.id, as_admin=as_admin)
 
