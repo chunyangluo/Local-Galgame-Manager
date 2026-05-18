@@ -165,57 +165,84 @@ dist\builds\<yyyyMMdd-HHmmss>\LocalGalgameManager\LocalGalgameManager.exe
 
 ---
 
+## 一键打包发布全流程
+
+### 快速发布脚本
+
+在项目根目录执行以下命令，**完整完成测试、打包、代码提交、发布**全流程：
+
+```powershell
+# ========== 1. 运行单元测试（确保代码质量） ==========
+python -m pytest tests/ -q
+
+# ========== 2. 功能自检（可选，验证核心功能） ==========
+python -m app.feature_selftest
+
+# ========== 3. 打包构建（生成 exe） ==========
+./build.ps1
+
+# ========== 4. 获取构建 ID 并创建发布包 ==========
+$buildId = (Get-ChildItem -Path "dist\builds" -Directory | Sort-Object LastWriteTime -Descending | Select-Object -First 1).Name
+Write-Host "Build ID: $buildId"
+Compress-Archive -Path "dist\builds\$buildId\LocalGalgameManager" -DestinationPath "dist\builds\LocalGalgameManager-v2.0.5-win64.zip" -Force
+
+# ========== 5. 更新版本文件（同步版本号） ==========
+# 更新 CHANGELOG.md 中的版本说明
+# 更新 README.md 中的版本号和下载链接
+
+# ========== 6. 提交代码到 Git 仓库 ==========
+git add -A
+git status  # 确认要提交的文件
+git commit -m "v2.0.5: 版本更新"
+git push origin main  # 推送到远程仓库
+
+# ========== 7. 推送版本标签（可选但推荐） ==========
+git tag v2.0.5
+git push origin v2.0.5
+
+# ========== 8. 上传 GitHub Release ==========
+gh release create v2.0.5 `
+  --title "Local Galgame Manager v2.0.5" `
+  --notes "**更新内容**：
+- 修复扫描器路径误判 BUG
+- 新增测试覆盖（136个测试）
+- 接入 pytest-cov 覆盖率统计
+- 配置 GitHub Actions CI
+- MainWindow 架构拆分优化" `
+  dist/builds/LocalGalgameManager-v2.0.5-win64.zip
+```
+
+### 分步说明
+
+| 步骤 | 命令 | 说明 |
+|------|------|------|
+| 1 | `python -m pytest tests/ -q` | 运行单元测试（136个），确保代码质量 |
+| 2 | `python -m app.feature_selftest` | 功能自检（可选），验证核心功能正常 |
+| 3 | `./build.ps1` | 打包构建，自动更新桌面快捷方式 |
+| 4 | `Compress-Archive ...` | 创建发布 ZIP 包 |
+| 5 | 手动更新文件 | 更新 CHANGELOG.md 和 README.md 版本信息 |
+| 6 | `git add -A && git commit && git push` | **提交并推送代码到 GitHub 仓库** |
+| 7 | `git tag && git push origin <tag>` | 推送版本标签（可选） |
+| 8 | `gh release create ...` | 创建 GitHub Release 并上传安装包 |
+
+### 注意事项
+
+1. **版本号**：脚本中的 `v2.0.5` 需要手动更新为当前版本号
+2. **gh CLI**：需提前安装 [GitHub CLI](https://cli.github.com/) 并登录（`gh auth login`）
+3. **CHANGELOG**：发布前建议更新 `CHANGELOG.md`
+4. **README**：发布后建议更新 README 中的版本号和下载链接
+
+### 环境要求
+
+- Python 3.12+
+- PyInstaller（会自动安装）
+- GitHub CLI（用于发布）
+
+---
+
 ## 开发收尾流程（建议）
 
-改完代码后可在本地按顺序执行：**单元测试** → **（可选）自检** → **`./build.ps1`** → **提交推送**；打 zip、发 GitHub Release 与 `gh` 凭据等细节见原 **`docs/RELEASE_CHECKLIST.md`** 与下列命令备忘。
-
-1. **单元测试**
-
-   ```powershell
-   cd <项目根目录>
-   python -m pytest tests/ -q
-   ```
-
-2. **（可选）自检**
-
-   ```powershell
-   python -m app.feature_selftest
-   ```
-
-3. **打包**
-
-   ```powershell
-   ./build.ps1
-   ```
-
-4. **（可选）打 zip 上传 Release**
-
-   ```powershell
-   $id = "yyyyMMdd-HHmmss"   # 与 dist\builds\<id> 一致
-   Compress-Archive -Path "dist\builds\$id\LocalGalgameManager" -DestinationPath "dist\builds\LocalGalgameManager-$id-win64.zip" -Force
-   ```
-
-5. **Git 提交与推送**
-
-   ```powershell
-   git add -A
-   git status
-   git commit -m "简述本次改动（完整句）"
-   git push origin main
-   ```
-
-   若未配置提交者：`git config user.name "..."` 与 `git config user.email "..."`。
-
-6. **HTTPS 推送与 `gh`**
-
-   ```powershell
-   gh auth status
-   gh auth setup-git
-   ```
-
-   若推送仍失败，可检查网络/代理或将 `origin` 改为 SSH 后再 `git push`。
-
-7. **（可选）`gh release create`**：见 **`docs/RELEASE_CHECKLIST.md`**。
+改完代码后可在本地按顺序执行：**单元测试** → **（可选）自检** → **`./build.ps1`** → **提交推送**；打 zip、发 GitHub Release 与 `gh` 凭据等细节见 **`docs/RELEASE_CHECKLIST.md`**。
 
 ---
 

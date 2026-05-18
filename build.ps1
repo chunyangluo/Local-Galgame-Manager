@@ -1,4 +1,7 @@
-# Stop running app if it's still active.
+$RUN_KEY_PATH = "Software\Microsoft\Windows\CurrentVersion\Run"
+$RUN_VALUE_NAME = "LocalGalgameManager"
+$desktopPath = [Environment]::GetFolderPath("Desktop")
+
 try {
     Stop-Process -Name "LocalGalgameManager" -ErrorAction Stop
     Write-Host "Stopped running LocalGalgameManager process."
@@ -35,7 +38,6 @@ if (-not (Test-Path $exePath)) {
     exit 1
 }
 
-$desktopPath = [Environment]::GetFolderPath("Desktop")
 $shortcutPath = Join-Path $desktopPath "Local Galgame Manager.lnk"
 $workingDirectory = Split-Path $exePath -Parent
 
@@ -51,6 +53,20 @@ try {
 catch {
     Write-Error "Build succeeded but failed to create desktop shortcut."
     exit 1
+}
+
+try {
+    $regPath = "HKCU:\$RUN_KEY_PATH"
+    if (Test-Path $regPath) {
+        $existingValue = Get-ItemProperty -Path $regPath -Name $RUN_VALUE_NAME -ErrorAction SilentlyContinue
+        if ($null -ne $existingValue) {
+            Set-ItemProperty -Path $regPath -Name $RUN_VALUE_NAME -Value "`"$exePath`""
+            Write-Host "Startup registry updated: $exePath"
+        }
+    }
+}
+catch {
+    Write-Host "Note: Could not update startup registry (may not be enabled)"
 }
 
 Write-Host "Build output: $exePath"
