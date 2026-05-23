@@ -108,6 +108,7 @@ class MainWindow(
         self._cover_retry_startup_success = 0
         self._play_history_window: PlayHistoryWindow | None = None
 
+        self._load_theme_preferences()
         self._build_ui()
         self._setup_tray()
         self.refresh_games()
@@ -167,10 +168,22 @@ class MainWindow(
         self.btn_manage_roots.setToolTip("查看、删除或清空已添加的扫描目录")
         lay_lib.addWidget(self.btn_manage_roots)
 
-        self.btn_scan = QPushButton("全量扫描")
-        self.btn_scan.clicked.connect(self._scan_all)
-        self.btn_scan.setToolTip("重新扫描所有已配置目录并同步游戏列表")
+        self.btn_scan = QToolButton()
+        self.btn_scan.setText("导入游戏")
+        self.btn_scan.setPopupMode(QToolButton.InstantPopup)
+        self.btn_scan.setToolTip("扫描游戏目录并导入游戏库")
+        scan_menu = QMenu(self.btn_scan)
+        act_full_scan = QAction("全量扫描", self)
+        act_full_scan.triggered.connect(self._scan_all)
+        act_full_scan.setToolTip("重新扫描所有已配置目录并同步游戏列表")
+        scan_menu.addAction(act_full_scan)
+        act_incremental_scan = QAction("增量扫描", self)
+        act_incremental_scan.triggered.connect(self._scan_incremental)
+        act_incremental_scan.setToolTip("只扫描新增游戏目录，跳过已有游戏")
+        scan_menu.addAction(act_incremental_scan)
+        self.btn_scan.setMenu(scan_menu)
         lay_lib.addWidget(self.btn_scan)
+        self._polish_toolbar_control(self.btn_scan)
 
         self.btn_vndb_import = QPushButton("VNDB 导入")
         self.btn_vndb_import.clicked.connect(self._vndb_import_from_existing)
@@ -276,6 +289,11 @@ class MainWindow(
             "配置本仓库 tools/2dfan-save-crawler 生成的 SQLite；存档管理「自动发现」会合并其中的路径线索"
         )
         more_menu.addAction(act_twodfan)
+        more_menu.addSeparator()
+        act_theme = QAction("界面设置…", self)
+        act_theme.triggered.connect(self._open_theme_settings)
+        act_theme.setToolTip("自定义主题、字体、颜色等界面外观设置")
+        more_menu.addAction(act_theme)
         self.btn_more.setMenu(more_menu)
         lay_sys.addWidget(self.btn_more)
         row_secondary.addWidget(wrap_sys, 0)
@@ -484,4 +502,48 @@ class MainWindow(
         super().closeEvent(event)
 
     def _apply_styles(self) -> None:
-        self.setStyleSheet(MAIN_WINDOW_STYLESHEET)
+        from app.ui.theme_manager import ThemeManager
+        theme_manager = ThemeManager()
+        self.setStyleSheet(theme_manager.get_stylesheet())
+
+    def _load_theme_preferences(self) -> None:
+        """从数据库加载主题偏好设置"""
+        from app.ui.theme_manager import ThemeManager
+        
+        try:
+            preferences = self.db.get_ui_preferences()
+            theme_manager = ThemeManager()
+            theme_manager.load_from_dict(preferences)
+        except Exception as e:
+            print(f"Failed to load theme preferences: {e}")
+
+    def _open_theme_settings(self) -> None:
+        """打开主题设置对话框"""
+        from app.ui.dialogs.theme_settings_dialog import ThemeSettingsDialog
+        
+        dialog = ThemeSettingsDialog(self)
+        dialog.theme_changed.connect(self._apply_theme)
+        dialog.exec()
+
+    def _apply_theme(self) -> None:
+        """应用主题到整个界面"""
+        from app.ui.theme_manager import ThemeManager
+        theme_manager = ThemeManager()
+        
+        # 获取新的样式表
+        new_stylesheet = theme_manager.get_stylesheet()
+        
+        # 先清空现有样式再应用新样式，确保生效
+        self.setStyleSheet("")
+        self.setStyleSheet(new_stylesheet)
+        
+        # 强制刷新
+        self.style().unpolish(self)
+        self.style().polish(self)
+        self.update()
+        
+        # 刷新所有子窗口
+        if hasattr(self, '_play_history_window') and self._play_history_window:
+            self._play_history_window.setStyleSheet(new_stylesheet)
+        if hasattr(self, '_save_manager_window') and self._save_manager_window:
+            self._save_manager_window.setStyleSheet(new_stylesheet)

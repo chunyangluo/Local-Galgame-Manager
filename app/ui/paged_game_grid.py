@@ -27,27 +27,44 @@ ROWS_PER_PAGE = 2
 
 CARD_W = 200
 CARD_H = 360
+MIN_CARD_W = 160
+MAX_CARD_W = 240
 H_GAP = 16
 V_GAP = 16
 PAGE_PAD = 16
 
 
 def _cols_for_inner_width(inner_w: int) -> int:
-    slot = CARD_W + H_GAP
-    if inner_w < CARD_W:
+    min_slot = MIN_CARD_W + H_GAP
+    max_slot = MAX_CARD_W + H_GAP
+    
+    if inner_w < MIN_CARD_W:
         return 1
-    return max(1, (inner_w + H_GAP) // slot)
+    
+    max_cols = (inner_w + H_GAP) // min_slot
+    min_cols = (inner_w + H_GAP) // max_slot
+    
+    return max(1, min_cols)
 
 
-def _full_page_height() -> int:
-    return PAGE_PAD * 2 + ROWS_PER_PAGE * CARD_H + (ROWS_PER_PAGE - 1) * V_GAP
+def _card_width_for_cols(inner_w: int, cols: int) -> int:
+    if cols <= 0:
+        return CARD_W
+    total_gap = (cols - 1) * H_GAP
+    available = inner_w - total_gap
+    card_w = available // cols
+    return max(MIN_CARD_W, min(MAX_CARD_W, card_w))
 
 
-def _page_height_for_count(count: int, cols: int) -> int:
+def _full_page_height(card_h: int = CARD_H) -> int:
+    return PAGE_PAD * 2 + ROWS_PER_PAGE * card_h + (ROWS_PER_PAGE - 1) * V_GAP
+
+
+def _page_height_for_count(count: int, cols: int, card_h: int = CARD_H) -> int:
     if count <= 0:
-        return _full_page_height()
+        return _full_page_height(card_h)
     rows = min(ROWS_PER_PAGE, (count + cols - 1) // cols)
-    return PAGE_PAD * 2 + rows * CARD_H + max(0, rows - 1) * V_GAP
+    return PAGE_PAD * 2 + rows * card_h + max(0, rows - 1) * V_GAP
 
 
 class FlowLayout(QLayout):
@@ -173,7 +190,6 @@ class _CardSlot(QFrame):
         super().__init__(parent)
         self._game_id = game_id
         self.setObjectName("gameCardSlot")
-        self.setFixedSize(CARD_W, CARD_H)
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
@@ -223,6 +239,7 @@ class PagedGameGridView(QWidget):
         self._page_starts: list[int] = []
         self._page_heights: list[int] = []
         self._cols: int = 1
+        self._current_card_w = CARD_W
         self._rebuild_timer = QTimer(self)
         self._rebuild_timer.setSingleShot(True)
         self._rebuild_timer.setInterval(80)
@@ -339,6 +356,7 @@ class PagedGameGridView(QWidget):
         page_w = max(self._scroll.viewport().width(), CARD_W + 2 * PAGE_PAD)
         inner_w = page_w - 2 * PAGE_PAD
         self._cols = _cols_for_inner_width(inner_w)
+        self._current_card_w = _card_width_for_cols(inner_w, self._cols)
         spp = self._slots_per_page()
         n = len(self._games)
         num_pages = (n + spp - 1) // spp
@@ -349,10 +367,13 @@ class PagedGameGridView(QWidget):
         self._page_heights = []
         y = 0
 
+        card_ratio = CARD_H / CARD_W
+        card_h = int(self._current_card_w * card_ratio)
+
         for p in range(num_pages):
             start = p * spp
             chunk = self._games[start : start + spp]
-            h = _page_height_for_count(len(chunk), self._cols)
+            h = _page_height_for_count(len(chunk), self._cols, card_h)
 
             page = QWidget()
             page.setFixedSize(page_w, h)
@@ -363,11 +384,12 @@ class PagedGameGridView(QWidget):
 
             for game in chunk:
                 card = GameCardWidget(game)
-                card.setFixedSize(CARD_W, CARD_H)
+                card.setFixedSize(self._current_card_w, card_h)
                 if game.id in self._cover_retry_failed:
                     card.force_no_cover_placeholder()
                 card.retry_cover_requested.connect(self._on_retry_cover)
                 slot = _CardSlot(game.id, card, page)
+                slot.setFixedSize(self._current_card_w, card_h)
                 slot.clicked.connect(self._on_slot_clicked)
                 slot.double_clicked.connect(self.double_clicked.emit)
                 slot.menu_requested.connect(self.context_menu_requested.emit)
@@ -382,8 +404,6 @@ class PagedGameGridView(QWidget):
 
         total_h = y
         vp_h = max(1, self._scroll.viewport().height())
-        # 最后一页高度常小于视口：若不垫高，scroll maximum 会小于最后一页顶
-        # 的 y，导致无法对齐第四页且「下一页」在 value==maximum 时被误判禁用。
         if self._page_starts:
             last_top = self._page_starts[-1]
             pad_bottom = max(0, last_top + vp_h - total_h)

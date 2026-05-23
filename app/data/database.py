@@ -119,6 +119,7 @@ class Database:
                 minimize_to_tray INTEGER DEFAULT 1,
                 run_on_startup INTEGER DEFAULT 0,
                 startup_scan_roots TEXT DEFAULT '[]',
+                ui_preferences TEXT DEFAULT '{}',
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY(current_user_id) REFERENCES users(id)
             );
@@ -303,6 +304,10 @@ class Database:
             self.conn.execute(
                 "ALTER TABLE settings ADD COLUMN auto_backup_before_launch INTEGER DEFAULT 0"
             )
+        if "ui_preferences" not in cols:
+            self.conn.execute(
+                "ALTER TABLE settings ADD COLUMN ui_preferences TEXT DEFAULT '{}'"
+            )
         if "twodfan_hints_db_path" not in cols:
             self.conn.execute(
                 "ALTER TABLE settings ADD COLUMN twodfan_hints_db_path TEXT DEFAULT ''"
@@ -445,6 +450,27 @@ class Database:
         )
         self.conn.commit()
 
+    def get_ui_preferences(self) -> dict:
+        row = self.conn.execute(
+            "SELECT ui_preferences FROM settings WHERE id = 1"
+        ).fetchone()
+        if row is None or row["ui_preferences"] is None:
+            return {}
+        try:
+            import json
+            return json.loads(str(row["ui_preferences"]))
+        except (json.JSONDecodeError, TypeError):
+            return {}
+
+    def set_ui_preferences(self, preferences: dict) -> None:
+        import json
+        preferences_json = json.dumps(preferences)
+        self.conn.execute(
+            "UPDATE settings SET ui_preferences = ?, updated_at = ? WHERE id = 1",
+            (preferences_json, datetime.utcnow().isoformat()),
+        )
+        self.conn.commit()
+
     def add_scan_root(self, path: str) -> None:
         self.conn.execute(
             "INSERT OR IGNORE INTO scan_roots (path, created_at) VALUES (?, ?)",
@@ -467,7 +493,7 @@ class Database:
             INSERT INTO games (name, root_dir, launch_exe, cover_path, created_at, updated_at)
             VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(root_dir) DO UPDATE SET
-                name = excluded.name,
+                name = COALESCE(NULLIF(games.custom_name, ''), excluded.name),
                 launch_exe = excluded.launch_exe,
                 cover_path = COALESCE(excluded.cover_path, games.cover_path),
                 updated_at = excluded.updated_at
@@ -516,7 +542,7 @@ class Database:
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(root_dir) DO UPDATE SET
-                    name = excluded.name,
+                    name = COALESCE(NULLIF(games.custom_name, ''), excluded.name),
                     launch_exe = excluded.launch_exe,
                     cover_path = COALESCE(excluded.cover_path, games.cover_path),
                     vndb_id = COALESCE(excluded.vndb_id, games.vndb_id),
@@ -688,6 +714,14 @@ class Database:
             )
             for r in rows
         ]
+
+    def list_all_game_dirs(self) -> set[str]:
+        """Return all game root directories in the database.
+
+        Used for incremental scan to skip already-imported games.
+        """
+        rows = self.conn.execute('SELECT root_dir FROM games').fetchall()
+        return {str(r['root_dir']) for r in rows}
 
     def get_game_by_id(self, user_id: int, game_id: int) -> GameRecord | None:
         """Return one game with the same fields as list_games.
@@ -891,10 +925,18 @@ class Database:
         where_clause = " OR ".join(["root_dir LIKE ?"] * len(roots))
         params: list[str] = [f"{root}%" for root in roots]
         rows = self.conn.execute(
-            f"SELECT id, root_dir FROM games WHERE {where_clause}",
+            f"SELECT id, root_dir, custom_name, custom_launch_exe, custom_cover_path FROM games WHERE {where_clause}",
             params,
         ).fetchall()
-        to_delete_ids = [int(r["id"]) for r in rows if str(r["root_dir"]) not in valid_game_dirs]
+        to_delete_ids = []
+        for r in rows:
+            if str(r["root_dir"]) not in valid_game_dirs:
+                custom_name = str(r["custom_name"]).strip() if r["custom_name"] is not None else ""
+                custom_launch_exe = str(r["custom_launch_exe"]).strip() if r["custom_launch_exe"] is not None else ""
+                custom_cover_path = str(r["custom_cover_path"]).strip() if r["custom_cover_path"] is not None else ""
+                has_custom = custom_name or custom_launch_exe or custom_cover_path
+                if not has_custom:
+                    to_delete_ids.append(int(r["id"]))
         if not to_delete_ids:
             return 0
         placeholders = ",".join(["?"] * len(to_delete_ids))
@@ -903,11 +945,21 @@ class Database:
         return len(to_delete_ids)
 
     def clear_all_games(self) -> int:
-        row = self.conn.execute("SELECT COUNT(*) AS cnt FROM games").fetchone()
-        count = int(row["cnt"]) if row else 0
-        self.conn.execute("DELETE FROM games")
+        rows = self.conn.execute("SELECT id, custom_name, custom_launch_exe, custom_cover_path FROM games").fetchall()
+        to_delete_ids = []
+        for r in rows:
+            custom_name = str(r["custom_name"]).strip() if r["custom_name"] is not None else ""
+            custom_launch_exe = str(r["custom_launch_exe"]).strip() if r["custom_launch_exe"] is not None else ""
+            custom_cover_path = str(r["custom_cover_path"]).strip() if r["custom_cover_path"] is not None else ""
+            has_custom = custom_name or custom_launch_exe or custom_cover_path
+            if not has_custom:
+                to_delete_ids.append(int(r["id"]))
+        if not to_delete_ids:
+            return 0
+        placeholders = ",".join(["?"] * len(to_delete_ids))
+        self.conn.execute(f"DELETE FROM games WHERE id IN ({placeholders})", to_delete_ids)
         self.conn.commit()
-        return count
+        return len(to_delete_ids)
 
     def set_game_custom_save_root(self, game_id: int, path: str | None) -> None:
         now = datetime.utcnow().isoformat()

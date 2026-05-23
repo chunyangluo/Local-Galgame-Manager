@@ -15,7 +15,6 @@ HARD_EXCLUDED_EXE_KEYWORDS = (
     "crash",
     "errorreport",
     "tool",
-    "汉化",
     "repair",
     "dxsetup",
     "vcredist",
@@ -43,7 +42,6 @@ SKIP_DIRECTORY_KEYWORDS = (
     "runtime",
     "support",
     "update",
-    "patch",
     "sdk",
 )
 SKIP_DIRECTORY_NAMES = {
@@ -96,57 +94,107 @@ class GameScanner:
     def scan_root(self, root: str) -> list[ScanResult]:
         root_path = Path(root)
         if not root_path.exists():
+            print(f"[Scanner] Root path does not exist: {root}")
             return []
+        
         results: list[ScanResult] = []
-        for directory in self._iter_game_directories(root_path):
-            candidate = self._pick_main_exe(directory)
-            if candidate is None:
-                continue
-            results.append(
-                ScanResult(
-                    game_name=self._resolve_game_name(directory),
-                    game_dir=str(directory),
-                    launch_exe=str(candidate),
+        skipped_dirs: list[tuple[str, str]] = []  # (dir_name, reason)
+        no_exe_dirs: list[str] = []
+        
+        try:
+            game_dirs = self._iter_game_directories(root_path)
+            print(f"[Scanner] Found {len(game_dirs)} potential game directories in {root}")
+        except Exception as e:
+            print(f"[Scanner] Error iterating game directories in {root}: {e}")
+            return []
+        
+        for directory in game_dirs:
+            try:
+                candidate = self._pick_main_exe(directory)
+                if candidate is None:
+                    no_exe_dirs.append(str(directory))
+                    continue
+                results.append(
+                    ScanResult(
+                        game_name=self._resolve_game_name(directory),
+                        game_dir=str(directory),
+                        launch_exe=str(candidate),
+                    )
                 )
-            )
+            except Exception as e:
+                skipped_dirs.append((str(directory), str(e)))
+                continue
+        
+        # 去重
         dedup: dict[str, ScanResult] = {}
         for item in results:
             dedup[item.game_dir] = item
+        
+        # 输出扫描总结
+        print(f"\n[Scanner] === 扫描完成 ===")
+        print(f"[Scanner] 总目录数: {len(game_dirs)}")
+        print(f"[Scanner] 识别到游戏: {len(dedup.values())}")
+        print(f"[Scanner] 无有效可执行文件: {len(no_exe_dirs)}")
+        print(f"[Scanner] 处理异常跳过: {len(skipped_dirs)}")
+        
+        if no_exe_dirs:
+            print(f"[Scanner] 无有效可执行文件的目录:")
+            for d in no_exe_dirs:
+                print(f"  - {d}")
+        
+        if skipped_dirs:
+            print(f"[Scanner] 跳过的目录:")
+            for d, reason in skipped_dirs:
+                print(f"  - {d}: {reason}")
+        
         return list(dedup.values())
 
     def _iter_game_directories(self, root_path: Path) -> list[Path]:
         game_dirs: list[Path] = []
-        first_level_dirs = sorted([p for p in root_path.iterdir() if p.is_dir()])
+        try:
+            first_level_dirs = sorted([p for p in root_path.iterdir() if p.is_dir()])
+        except PermissionError as e:
+            print(f"[Scanner] Permission denied accessing {root_path}: {e}")
+            return []
+        except OSError as e:
+            print(f"[Scanner] OS error accessing {root_path}: {e}")
+            return []
+        
         for first_dir in first_level_dirs:
-            if self._should_skip_directory(first_dir):
+            try:
+                if self._should_skip_directory(first_dir):
+                    continue
+                if self._is_dev_project_directory(first_dir):
+                    continue
+                if self._is_non_game_dir_name(first_dir.name) and not self._is_bridge_dir_name(first_dir.name):
+                    continue
+                grouped_count = self._extract_group_count(first_dir.name)
+                if grouped_count > 0:
+                    sub_games = sorted([p for p in first_dir.iterdir() if p.is_dir()])
+                    if grouped_count <= len(sub_games):
+                        sub_games = sub_games[:grouped_count]
+                    for sub in sub_games:
+                        if self._should_skip_directory(sub):
+                            continue
+                        if self._is_dev_project_directory(sub):
+                            continue
+                        if self._is_non_game_dir_name(sub.name) and not self._is_bridge_dir_name(sub.name):
+                            continue
+                        game_dirs.append(sub)
+                    continue
+                auto_sub_games = self._auto_detect_bundle_subgames(first_dir)
+                if auto_sub_games:
+                    game_dirs.extend(auto_sub_games)
+                    continue
+                nested_games = self._discover_nested_game_dirs(first_dir, max_depth=4)
+                if nested_games:
+                    game_dirs.extend(nested_games)
+                    continue
+                game_dirs.append(first_dir)
+            except PermissionError:
                 continue
-            if self._is_dev_project_directory(first_dir):
+            except OSError:
                 continue
-            if self._is_non_game_dir_name(first_dir.name) and not self._is_bridge_dir_name(first_dir.name):
-                continue
-            grouped_count = self._extract_group_count(first_dir.name)
-            if grouped_count > 0:
-                sub_games = sorted([p for p in first_dir.iterdir() if p.is_dir()])
-                if grouped_count <= len(sub_games):
-                    sub_games = sub_games[:grouped_count]
-                for sub in sub_games:
-                    if self._should_skip_directory(sub):
-                        continue
-                    if self._is_dev_project_directory(sub):
-                        continue
-                    if self._is_non_game_dir_name(sub.name) and not self._is_bridge_dir_name(sub.name):
-                        continue
-                    game_dirs.append(sub)
-                continue
-            auto_sub_games = self._auto_detect_bundle_subgames(first_dir)
-            if auto_sub_games:
-                game_dirs.extend(auto_sub_games)
-                continue
-            nested_games = self._discover_nested_game_dirs(first_dir, max_depth=4)
-            if nested_games:
-                game_dirs.extend(nested_games)
-                continue
-            game_dirs.append(first_dir)
         return game_dirs
 
     def _auto_detect_bundle_subgames(self, first_dir: Path) -> list[Path]:
@@ -179,40 +227,58 @@ class GameScanner:
         return launchable_children
 
     def _pick_main_exe(self, directory: Path) -> Path | None:
-        exes = sorted(directory.glob("*.exe"))
+        try:
+            exes = sorted(directory.glob("*.exe"))
+        except PermissionError:
+            return None
+        except OSError:
+            return None
+        
         if not exes:
             return None
+        
         scored: list[tuple[int, Path]] = []
         dir_key = self._normalize_name(directory.name)
+        
         for exe in exes:
-            lower = exe.name.lower()
-            if any(k in lower for k in HARD_EXCLUDED_EXE_KEYWORDS):
+            try:
+                lower = exe.name.lower()
+                if any(k in lower for k in HARD_EXCLUDED_EXE_KEYWORDS):
+                    continue
+                
+                score = 0
+                exe_stem_key = self._normalize_name(exe.stem)
+                
+                if dir_key and exe_stem_key == dir_key:
+                    score += 8
+                elif dir_key and dir_key in exe_stem_key:
+                    score += 5
+                
+                if "game" in lower or "start" in lower:
+                    score += 2
+                if "x64" in lower or "64" in lower:
+                    score += 1
+                if any(k in lower for k in SOFT_PENALTY_KEYWORDS):
+                    score -= 3
+                
+                size_mb = exe.stat().st_size / (1024 * 1024)
+                if size_mb >= 5:
+                    score += 2
+                elif size_mb < 1:
+                    score -= 2
+                
+                scored.append((score, exe))
+            except (PermissionError, OSError):
                 continue
-            score = 0
-            exe_stem_key = self._normalize_name(exe.stem)
-            if dir_key and exe_stem_key == dir_key:
-                score += 8
-            elif dir_key and dir_key in exe_stem_key:
-                score += 5
-            if "game" in lower or "start" in lower:
-                score += 2
-            if "x64" in lower or "64" in lower:
-                score += 1
-            if any(k in lower for k in SOFT_PENALTY_KEYWORDS):
-                score -= 3
-            # Usually real game executables are larger than helper tools.
-            size_mb = exe.stat().st_size / (1024 * 1024)
-            if size_mb >= 5:
-                score += 2
-            elif size_mb < 1:
-                score -= 2
-            scored.append((score, exe))
+        
         if not scored:
             return None
+        
         scored.sort(key=lambda x: (x[0], x[1].stat().st_size), reverse=True)
-        # Guardrail: if all candidates are strongly negative, skip auto-pick.
+        
         if scored[0][0] < -2:
             return None
+        
         return scored[0][1]
 
     def _should_skip_directory(self, directory: Path) -> bool:

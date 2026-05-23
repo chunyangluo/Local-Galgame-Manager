@@ -75,6 +75,20 @@ class TestGameCRUD:
         assert len(games) == 1
         assert games[0].cover_path == "/cover1.jpg"
 
+
+    def test_upsert_preserves_custom_name_on_conflict(self, db_with_user: tuple[Database, int]) -> None:
+        db, uid = db_with_user
+        db.upsert_game("AutoName", "/games/g", "/games/g/g.exe")
+        games = db.list_games(uid)
+        assert games[0].name == "AutoName"
+        db.update_game_identity(games[0].id, "MyCustomName", "/games/g/g.exe")
+        games = db.list_games(uid)
+        assert games[0].name == "MyCustomName"
+        db.upsert_game("NewAutoName", "/games/g", "/games/g/g.exe")
+        games = db.list_games(uid)
+        assert len(games) == 1
+        assert games[0].name == "MyCustomName"
+
     def test_find_game_by_root(self, db_with_user: tuple[Database, int]) -> None:
         db, uid = db_with_user
         db.upsert_game("MyGame", "/games/my", "/games/my/g.exe")
@@ -99,6 +113,14 @@ class TestGameCRUD:
         assert db.get_game_by_id(uid, -1) is None
         assert db.get_game_by_id(uid, "abc") is None
 
+
+    def test_list_all_game_dirs(self, db_with_user: tuple[Database, int]) -> None:
+        db, uid = db_with_user
+        assert db.list_all_game_dirs() == set()
+        db.upsert_game("Game1", "/g1", "/g1/g.exe")
+        db.upsert_game("Game2", "/g2", "/g2/g.exe")
+        dirs = db.list_all_game_dirs()
+        assert dirs == {"/g1", "/g2"}
     def test_update_game_custom_cover(self, db_with_user: tuple[Database, int]) -> None:
         db, uid = db_with_user
         db.upsert_game("Game", "/g", "/g/g.exe", "/old_cover.jpg")
@@ -130,6 +152,25 @@ class TestGameCRUD:
         assert len(games) == 1
         assert games[0].name == "Keep"
 
+    def test_delete_games_not_in_scan_preserves_custom_name(self, db_with_user: tuple[Database, int]) -> None:
+        db, uid = db_with_user
+        db.upsert_game("AutoName1", "/games/keep", "/games/keep/g.exe")
+        db.upsert_game("AutoName2", "/games/remove", "/games/remove/g.exe")
+        games = db.list_games(uid)
+        assert len(games) == 2
+        # 找到 "/games/keep" 并设置 custom_name
+        for game in games:
+            if game.root_dir == "/games/keep":
+                db.update_game_identity(game.id, "MyCustomName", "/games/keep/g.exe")
+                break
+        # 现在 delete_games_not_in_scan 应该只删除没有 custom_name 的那个
+        deleted = db.delete_games_not_in_scan(["/games"], {"/games/keep"})
+        # 因为 "/games/remove" 不在 valid_game_dirs 中，且没有 custom_name，应该被删除
+        assert deleted == 1
+        games = db.list_games(uid)
+        assert len(games) == 1
+        assert games[0].name == "MyCustomName"
+
     def test_clear_all_games(self, db_with_user: tuple[Database, int]) -> None:
         db, uid = db_with_user
         db.upsert_game("A", "/a", "/a/a.exe")
@@ -137,6 +178,22 @@ class TestGameCRUD:
         count = db.clear_all_games()
         assert count == 2
         assert len(db.list_games(uid)) == 0
+
+    def test_clear_all_games_preserves_custom_name(self, db_with_user: tuple[Database, int]) -> None:
+        db, uid = db_with_user
+        db.upsert_game("AutoName1", "/a", "/a/a.exe")
+        db.upsert_game("AutoName2", "/b", "/b/b.exe")
+        games = db.list_games(uid)
+        assert len(games) == 2
+        # 给其中一个设置 custom_name
+        gid = games[0].id
+        db.update_game_identity(gid, "MyCustomName", "/a/a.exe")
+        # clear_all_games 应该只删除没有 custom_name 的那个
+        count = db.clear_all_games()
+        assert count == 1
+        games = db.list_games(uid)
+        assert len(games) == 1
+        assert games[0].name == "MyCustomName"
 
 
 class TestUniqueness:

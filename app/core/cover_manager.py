@@ -14,10 +14,19 @@ PRIORITY_DIR_WHITELIST = (
     "covers",
     "img",
     "image",
+    "images",
     "title",
     "bg",
     "art",
     "splash",
+    "illust",
+    "picture",
+    "pic",
+    "graphic",
+    "resource",
+    "resources",
+    "data",
+    "media",
 )
 DIR_BLACKLIST = (
     "save",
@@ -27,8 +36,17 @@ DIR_BLACKLIST = (
     "update",
     "manual",
     "doc",
+    "docs",
     "movie",
     "voice",
+    "sound",
+    "music",
+    "audio",
+    "system",
+    "temp",
+    "cache",
+    "log",
+    "logs",
 )
 
 PRIMARY_NAME_KEYWORDS = (
@@ -38,12 +56,36 @@ PRIMARY_NAME_KEYWORDS = (
     "bg",
     "splash",
     "icon",
+    "art",
+    "illust",
+    "poster",
+    "main",
+    "start",
+    "menu",
+    "游戏封面",
+    "封面",
+    "标题",
+    "开始",
+    "菜单",
 )
 SECONDARY_NAME_KEYWORDS = (
     "game",
-    "start",
-    "main",
-    "menu",
+    "visual",
+    "novel",
+    "opening",
+    "intro",
+    "cg",
+    "scene",
+    "story",
+    "character",
+    "chara",
+    "profile",
+    "face",
+    "portrait",
+    "立绘",
+    "CG",
+    "角色",
+    "人物",
 )
 NEGATIVE_NAME_KEYWORDS = (
     "back",
@@ -55,6 +97,17 @@ NEGATIVE_NAME_KEYWORDS = (
     "thumb",
     "thumbnail",
     "sample",
+    "icon",
+    "small",
+    "mini",
+    "preview",
+    "temp",
+    "cache",
+    "backup",
+    "old",
+    "_bak",
+    "_old",
+    "_backup",
 )
 COVER_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp")
 
@@ -220,25 +273,45 @@ class CoverManager:
         name = file.stem.lower()
         score = 0
 
-        if any(k in name for k in PRIMARY_NAME_KEYWORDS):
-            score += 10
-        if any(k in name for k in SECONDARY_NAME_KEYWORDS):
-            score += 8
-        if any(k in name for k in NEGATIVE_NAME_KEYWORDS):
-            score -= 5
-        if any(keyword and keyword in name for keyword in game_keywords):
-            score += 15
+        primary_count = sum(1 for k in PRIMARY_NAME_KEYWORDS if k in name)
+        if primary_count > 0:
+            score += primary_count * 12
+
+        secondary_count = sum(1 for k in SECONDARY_NAME_KEYWORDS if k in name)
+        if secondary_count > 0:
+            score += secondary_count * 6
+
+        negative_count = sum(1 for k in NEGATIVE_NAME_KEYWORDS if k in name)
+        if negative_count > 0:
+            score -= negative_count * 8
+
+        keyword_matches = sum(1 for kw in game_keywords if kw and kw in name)
+        if keyword_matches > 0:
+            score += keyword_matches * 20
 
         rel_depth = max(0, len(file.parent.parts) - len(base_dir.parts))
-        score -= rel_depth * 3
+        if rel_depth == 0:
+            score += 5
+        elif rel_depth == 1:
+            score += 0
+        elif rel_depth == 2:
+            score -= 5
+        else:
+            score -= 12
 
         try:
             file_size = file.stat().st_size
         except OSError:
             return -9999
 
-        if file_size < 8_192:
+        if file_size < 4_096:
             return -500
+        elif file_size < 16_384:
+            score -= 5
+        elif file_size >= 256_000:
+            score += 8
+        elif file_size >= 128_000:
+            score += 4
 
         dims = read_image_size_fast(file)
         if dims is None:
@@ -250,26 +323,63 @@ class CoverManager:
 
         width, height = dims
         short_edge = min(width, height)
-        if short_edge < 260:
+        long_edge = max(width, height)
+
+        if short_edge < 200:
             return -500
+        elif short_edge < 260:
+            score -= 8
+        elif short_edge >= 500:
+            score += 10
+        elif short_edge >= 350:
+            score += 5
 
         ratio = width / max(1, height)
 
-        ratio_targets = (16 / 9, 4 / 3, 16 / 10, 3 / 4, 9 / 16, 2 / 3)
-        closest_delta = min(abs(ratio - target) for target in ratio_targets)
-        if closest_delta <= 0.08:
-            score += 14
-        elif closest_delta <= 0.2:
-            score += 6
-        else:
-            score -= 6
+        cover_ratios = (
+            (2/3, "2:3 竖版封面"),
+            (3/4, "3:4 竖版"),
+            (9/16, "9:16 手机竖版"),
+            (16/10, "16:10 横版"),
+            (4/3, "4:3 经典"),
+            (16/9, "16:9 宽屏"),
+            (1/1, "1:1 正方形"),
+        )
 
-        if ratio < 0.45 or ratio > 3.2:
-            score -= 15
+        best_ratio_score = 0
+        for target_ratio, _name in cover_ratios:
+            delta = abs(ratio - target_ratio)
+            if delta <= 0.05:
+                ratio_score = 18
+            elif delta <= 0.1:
+                ratio_score = 12
+            elif delta <= 0.15:
+                ratio_score = 6
+            elif delta <= 0.25:
+                ratio_score = 2
+            else:
+                ratio_score = -8
+
+            if ratio_score > best_ratio_score:
+                best_ratio_score = ratio_score
+
+        score += best_ratio_score
+
+        if ratio < 0.35 or ratio > 4.0:
+            score -= 20
 
         pixel_area = width * height
-        if pixel_area >= 900_000:
-            score += 10
+        if pixel_area >= 1_000_000:
+            score += 8
+        elif pixel_area >= 500_000:
+            score += 4
+
+        aspect_bonus = 0
+        if 0.4 < ratio < 0.7:
+            aspect_bonus = 6
+        elif 1.3 < ratio < 2.0:
+            aspect_bonus = 4
+        score += aspect_bonus
 
         return score
 

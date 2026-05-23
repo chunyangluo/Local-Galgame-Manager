@@ -372,7 +372,16 @@ class GameDetailDialog(QDialog):
         self.reload_from_db()
 
     def _on_set_custom_cover(self) -> None:
-        if self._main.set_custom_cover_for_game_id(self._game_id):
+        from app.ui.dialogs.custom_cover_manager_dialog import CustomCoverManagerDialog
+        
+        dialog = CustomCoverManagerDialog(
+            self._main,
+            self._game_id,
+            self._game.name,
+            self._game.root_dir,
+            self._game.cover_path
+        )
+        if dialog.exec():
             self.reload_from_db()
 
     def _on_open_save_manager(self) -> None:
