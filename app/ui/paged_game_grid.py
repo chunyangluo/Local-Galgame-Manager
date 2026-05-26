@@ -42,9 +42,8 @@ def _cols_for_inner_width(inner_w: int) -> int:
         return 1
     
     max_cols = (inner_w + H_GAP) // min_slot
-    min_cols = (inner_w + H_GAP) // max_slot
     
-    return max(1, min_cols)
+    return max(1, max_cols)
 
 
 def _card_width_for_cols(inner_w: int, cols: int) -> int:
@@ -150,7 +149,7 @@ class FlowLayout(QLayout):
             if w is None:
                 continue
             next_x = x + w.width() + hx
-            if next_x - hx > eff.right() and line_h > 0:
+            if next_x - hx > eff.right() + 1 and line_h > 0:
                 x = eff.x()
                 y = y + line_h + vy
                 next_x = x + w.width() + hx
@@ -511,6 +510,23 @@ class PagedGameGridView(QWidget):
     def _go_next_page(self) -> None:
         self._scroll_by_page_step(1)
         self._snap_scroll_to_page()
+
+    def select_game_by_id(self, game_id: int) -> None:
+        """通过游戏ID选择游戏并滚动到可见位置"""
+        # 找到游戏所在的页
+        spp = self._slots_per_page()
+        for idx, game in enumerate(self._games):
+            if game.id == game_id:
+                target_page = idx // spp
+                # 滚动到目标页
+                if target_page < len(self._page_starts):
+                    self._scroll.verticalScrollBar().setValue(self._page_starts[target_page])
+                # 选择游戏
+                self._selected_id = game_id
+                self._restore_selection_styles()
+                self._update_nav_state()
+                self.selection_changed.emit()
+                break
 
     def _on_slot_clicked(self, game_id: int) -> None:
         self._selected_id = game_id

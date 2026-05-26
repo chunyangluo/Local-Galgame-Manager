@@ -116,57 +116,123 @@ class MainWindow(
         if self.db.list_scan_roots():
             self.status.setText('已加载扫描目录，点击"全量扫描"开始更新游戏库')
 
-    def _make_toolbar_group(self, title: str, *, tier: str = "primary") -> tuple[QWidget, QHBoxLayout]:
-        wrapper = QWidget()
-        wrapper.setProperty("toolbarGroup", True)
-        wrapper.setProperty("toolbarTier", tier)
-        outer = QHBoxLayout(wrapper)
-        outer.setContentsMargins(10, 8, 12, 8)
-        outer.setSpacing(10)
-        title_lbl = QLabel(title)
-        title_lbl.setObjectName("toolbarSectionLabel")
-        inner = QHBoxLayout()
-        inner.setSpacing(8)
-        outer.addWidget(title_lbl, 0, Qt.AlignVCenter)
-        outer.addLayout(inner, 1)
-        return wrapper, inner
 
     def _polish_toolbar_control(self, widget: QWidget) -> None:
         widget.setCursor(Qt.PointingHandCursor)
+
+    def _build_more_menu(self) -> QMenu:
+        menu = QMenu(self)
+
+        self.act_manage_roots = QAction("管理目录…", self)
+        self.act_manage_roots.triggered.connect(self._manage_scan_roots)
+        self.act_manage_roots.setToolTip("查看、删除或清空已添加的扫描目录")
+        menu.addAction(self.act_manage_roots)
+
+        act_add_user = QAction("新建用户", self)
+        act_add_user.triggered.connect(self._add_user)
+        act_add_user.setToolTip("创建并切换到新的本地用户")
+        menu.addAction(act_add_user)
+
+        menu.addSeparator()
+
+        act_backup = QAction("导出备份", self)
+        act_backup.triggered.connect(self._backup)
+        act_backup.setToolTip("备份游戏库与设置到 zip")
+        menu.addAction(act_backup)
+
+        act_restore = QAction("恢复备份", self)
+        act_restore.triggered.connect(self._restore)
+        act_restore.setToolTip("从备份 zip 恢复数据")
+        menu.addAction(act_restore)
+
+        menu.addSeparator()
+
+        act_history = QAction("游玩历史…", self)
+        act_history.triggered.connect(self.open_play_history)
+        act_history.setToolTip("独立窗口：全部游玩记录、筛选、清空")
+        menu.addAction(act_history)
+
+        act_game_detail = QAction("游戏详情…", self)
+        act_game_detail.triggered.connect(self._open_selected_game_detail)
+        act_game_detail.setToolTip("完整元数据、游玩记录、文件夹与调试信息")
+        menu.addAction(act_game_detail)
+
+        menu.addSeparator()
+
+        act_le = QAction("Locale Emulator (LE)…", self)
+        act_le.triggered.connect(self._open_locale_emulator_settings)
+        act_le.setToolTip("配置 LEProc.exe，用于「LE 转区启动」")
+        menu.addAction(act_le)
+
+        act_twodfan = QAction("2DFan线索库…", self)
+        act_twodfan.triggered.connect(self._open_twodfan_library_dialog)
+        act_twodfan.setToolTip("配置存档路径线索库")
+        menu.addAction(act_twodfan)
+
+        menu.addSeparator()
+
+        self.act_startup = QAction("开机启动", self)
+        self.act_startup.setCheckable(True)
+        self.act_startup.triggered.connect(self._toggle_startup)
+        self.act_startup.setToolTip("是否随 Windows 登录自动启动本程序")
+        menu.addAction(self.act_startup)
+
+        self.act_auto_backup = QAction("启动前备份", self)
+        self.act_auto_backup.setCheckable(True)
+        self.act_auto_backup.triggered.connect(self._toggle_auto_backup_before_launch)
+        self.act_auto_backup.setToolTip("启动游戏前自动备份已配置的存档目录")
+        menu.addAction(self.act_auto_backup)
+
+        self._apply_auto_backup_launch_ui()
+
+        menu.addSeparator()
+
+        act_settings = QAction("设置…", self)
+        act_settings.triggered.connect(self._open_settings)
+        act_settings.setToolTip("综合设置：启动方式、备份、封面等")
+        menu.addAction(act_settings)
+
+        act_theme = QAction("界面设置…", self)
+        act_theme.triggered.connect(self._open_theme_settings)
+        act_theme.setToolTip("自定义主题、字体、颜色")
+        menu.addAction(act_theme)
+
+        menu.addSeparator()
+
+        act_plugins = QAction("插件管理…", self)
+        act_plugins.triggered.connect(self._open_plugin_settings)
+        act_plugins.setToolTip("启用或禁用扫描结果插件")
+        menu.addAction(act_plugins)
+
+        return menu
 
     def _build_ui(self) -> None:
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
 
-        row_primary = QHBoxLayout()
-        row_primary.setSpacing(12)
+        # ── 单行扁平工具栏 ──
+        toolbar = QHBoxLayout()
+        toolbar.setSpacing(6)
+        toolbar.setContentsMargins(8, 6, 8, 6)
 
-        wrap_find, lay_find = self._make_toolbar_group("找游戏", tier="primary")
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("搜索游戏（中/英/日）")
+        self.search_input.setFixedWidth(200)
         self.search_input.textChanged.connect(self._apply_filters)
-        lay_find.addWidget(self.search_input, 1)
+        toolbar.addWidget(self.search_input)
+
         self.favorite_only = QCheckBox("仅收藏")
         self.favorite_only.stateChanged.connect(self._apply_filters)
-        lay_find.addWidget(self.favorite_only)
-        self.btn_refresh = QPushButton("刷新")
-        self.btn_refresh.clicked.connect(self.refresh_games)
-        self.btn_refresh.setToolTip("重新从数据库加载列表与筛选结果")
-        lay_find.addWidget(self.btn_refresh)
-        self._polish_toolbar_control(self.btn_refresh)
-        row_primary.addWidget(wrap_find, 3)
+        toolbar.addWidget(self.favorite_only)
 
-        wrap_lib, lay_lib = self._make_toolbar_group("库", tier="primary")
+        toolbar.addSpacing(8)
+
         self.btn_add_root = QPushButton("添加目录")
         self.btn_add_root.clicked.connect(self._add_scan_root)
         self.btn_add_root.setToolTip("选择一个游戏根目录加入扫描范围")
-        lay_lib.addWidget(self.btn_add_root)
-
-        self.btn_manage_roots = QPushButton("管理目录")
-        self.btn_manage_roots.clicked.connect(self._manage_scan_roots)
-        self.btn_manage_roots.setToolTip("查看、删除或清空已添加的扫描目录")
-        lay_lib.addWidget(self.btn_manage_roots)
+        toolbar.addWidget(self.btn_add_root)
+        self._polish_toolbar_control(self.btn_add_root)
 
         self.btn_scan = QToolButton()
         self.btn_scan.setText("导入游戏")
@@ -182,127 +248,72 @@ class MainWindow(
         act_incremental_scan.setToolTip("只扫描新增游戏目录，跳过已有游戏")
         scan_menu.addAction(act_incremental_scan)
         self.btn_scan.setMenu(scan_menu)
-        lay_lib.addWidget(self.btn_scan)
+        toolbar.addWidget(self.btn_scan)
         self._polish_toolbar_control(self.btn_scan)
 
         self.btn_vndb_import = QPushButton("VNDB 导入")
         self.btn_vndb_import.clicked.connect(self._vndb_import_from_existing)
         self.btn_vndb_import.setToolTip("对当前库批量匹配 VNDB / Bangumi 元数据与封面")
-        lay_lib.addWidget(self.btn_vndb_import)
-        for w in (self.btn_add_root, self.btn_manage_roots, self.btn_scan, self.btn_vndb_import):
-            self._polish_toolbar_control(w)
-        row_primary.addWidget(wrap_lib, 4)
-        root.addLayout(row_primary)
+        toolbar.addWidget(self.btn_vndb_import)
+        self._polish_toolbar_control(self.btn_vndb_import)
 
-        row_secondary = QHBoxLayout()
-        row_secondary.setSpacing(12)
+        toolbar.addSpacing(8)
 
-        wrap_acct, lay_acct = self._make_toolbar_group("账户", tier="secondary")
-        self.user_picker = QComboBox()
-        self.user_picker.setMinimumWidth(160)
-        self.user_picker.currentIndexChanged.connect(self._switch_user_from_picker)
-        self.user_picker.setToolTip("切换当前本地用户")
-        lay_acct.addWidget(self.user_picker, 1)
-        self.btn_add_user = QPushButton("新建用户")
-        self.btn_add_user.clicked.connect(self._add_user)
-        self.btn_add_user.setToolTip("创建并切换到新的本地用户")
-        lay_acct.addWidget(self.btn_add_user)
-        self._polish_toolbar_control(self.btn_add_user)
-        row_secondary.addWidget(wrap_acct, 2)
-
-        wrap_disp, lay_disp = self._make_toolbar_group("显示", tier="secondary")
         self.btn_toggle_view = QPushButton("网格视图")
         self.btn_toggle_view.clicked.connect(self._toggle_view_mode)
         self.btn_toggle_view.setCheckable(True)
         self.btn_toggle_view.setChecked(True)
         self.btn_toggle_view.setProperty("active", True)
         self.btn_toggle_view.setToolTip("切换网格 / 列表视图")
-        lay_disp.addWidget(self.btn_toggle_view)
+        toolbar.addWidget(self.btn_toggle_view)
+        self._polish_toolbar_control(self.btn_toggle_view)
+
+        self._random_excluded_ids: set[int] = set()
+
+        self.btn_random = QPushButton("🎲 随机")
+        self.btn_random.clicked.connect(self._random_pick_game)
+        self.btn_random.setToolTip("从列表中随机选择一个游戏")
+        toolbar.addWidget(self.btn_random)
+        self._polish_toolbar_control(self.btn_random)
 
         self.btn_online_cover = QPushButton("")
         self.btn_online_cover.clicked.connect(self._toggle_online_cover)
         self.btn_online_cover.setToolTip("封面策略：仅本地 / 本地优先 / 网图优先")
         self._apply_cover_fetch_mode_ui()
-        lay_disp.addWidget(self.btn_online_cover)
-        self._polish_toolbar_control(self.btn_toggle_view)
+        toolbar.addWidget(self.btn_online_cover)
         self._polish_toolbar_control(self.btn_online_cover)
-        self.btn_game_detail = QPushButton("游戏详情")
-        self.btn_game_detail.clicked.connect(self._open_selected_game_detail)
-        self.btn_game_detail.setToolTip("完整元数据、游玩记录、文件夹与调试信息（Ctrl+I）")
-        lay_disp.addWidget(self.btn_game_detail)
-        self._polish_toolbar_control(self.btn_game_detail)
-        self.btn_play_history = QPushButton("游玩历史")
-        self.btn_play_history.clicked.connect(self.open_play_history)
-        self.btn_play_history.setToolTip("按时间查看全部游玩记录，支持筛选与批量删除")
-        lay_disp.addWidget(self.btn_play_history)
-        self._polish_toolbar_control(self.btn_play_history)
-        row_secondary.addWidget(wrap_disp, 0)
 
-        wrap_sys, lay_sys = self._make_toolbar_group("系统", tier="secondary")
-        self.btn_startup = QPushButton("开机启动: OFF")
-        self.btn_startup.setCheckable(True)
-        self.btn_startup.clicked.connect(self._toggle_startup)
-        self.btn_startup.setToolTip("是否随 Windows 登录自动启动本程序")
-        lay_sys.addWidget(self.btn_startup)
-        self._polish_toolbar_control(self.btn_startup)
-        self.btn_auto_backup_launch = QPushButton("")
-        self.btn_auto_backup_launch.setCheckable(True)
-        self.btn_auto_backup_launch.clicked.connect(self._toggle_auto_backup_before_launch)
-        self.btn_auto_backup_launch.setToolTip("启动游戏前自动备份已配置的存档目录")
-        lay_sys.addWidget(self.btn_auto_backup_launch)
-        self._polish_toolbar_control(self.btn_auto_backup_launch)
-        self._apply_auto_backup_launch_ui()
+        self.btn_refresh = QPushButton("刷新")
+        self.btn_refresh.clicked.connect(self.refresh_games)
+        self.btn_refresh.setToolTip("重新从数据库加载列表与筛选结果")
+        toolbar.addWidget(self.btn_refresh)
+        self._polish_toolbar_control(self.btn_refresh)
+
+        toolbar.addStretch(1)
+
+        self.user_picker = QComboBox()
+        self.user_picker.setMinimumWidth(160)
+        self.user_picker.currentIndexChanged.connect(self._switch_user_from_picker)
+        self.user_picker.setToolTip("切换当前本地用户")
+        toolbar.addWidget(self.user_picker)
 
         self.btn_more = QToolButton()
-        self.btn_more.setText("更多")
+        self.btn_more.setText("⚙ 设置")
         self.btn_more.setPopupMode(QToolButton.InstantPopup)
-        self.btn_more.setToolTip("备份、恢复、插件、Locale Emulator、2DFan 线索库等不常用功能")
+        self.btn_more.setToolTip("设置与更多功能")
+        self.btn_more.setMenu(self._build_more_menu())
+        toolbar.addWidget(self.btn_more)
         self._polish_toolbar_control(self.btn_more)
-        more_menu = QMenu(self.btn_more)
-        act_backup = QAction("导出备份", self)
-        act_backup.triggered.connect(self._backup)
-        act_backup.setToolTip("备份游戏库与设置到 zip")
-        more_menu.addAction(act_backup)
-        act_restore = QAction("恢复备份", self)
-        act_restore.triggered.connect(self._restore)
-        act_restore.setToolTip("从备份 zip 恢复数据")
-        more_menu.addAction(act_restore)
-        more_menu.addSeparator()
-        act_plugins = QAction("插件管理…", self)
-        act_plugins.triggered.connect(self._open_plugin_settings)
-        act_plugins.setToolTip("启用或禁用扫描结果插件")
-        more_menu.addAction(act_plugins)
-        more_menu.addSeparator()
-        act_history = QAction("游玩历史…", self)
-        act_history.triggered.connect(self.open_play_history)
-        act_history.setToolTip("独立窗口：全部游玩记录、筛选、清空")
-        more_menu.addAction(act_history)
-        more_menu.addSeparator()
-        act_le = QAction("Locale Emulator (LE)…", self)
-        act_le.triggered.connect(self._open_locale_emulator_settings)
-        act_le.setToolTip("配置 LEProc.exe，用于「LE 转区启动」Galgame")
-        more_menu.addAction(act_le)
-        more_menu.addSeparator()
-        act_twodfan = QAction("2DFan 线索库与爬虫…", self)
-        act_twodfan.triggered.connect(self._open_twodfan_library_dialog)
-        act_twodfan.setToolTip(
-            "配置本仓库 tools/2dfan-save-crawler 生成的 SQLite；存档管理「自动发现」会合并其中的路径线索"
-        )
-        more_menu.addAction(act_twodfan)
-        more_menu.addSeparator()
-        act_theme = QAction("界面设置…", self)
-        act_theme.triggered.connect(self._open_theme_settings)
-        act_theme.setToolTip("自定义主题、字体、颜色等界面外观设置")
-        more_menu.addAction(act_theme)
-        self.btn_more.setMenu(more_menu)
-        lay_sys.addWidget(self.btn_more)
-        row_secondary.addWidget(wrap_sys, 0)
-        row_secondary.addStretch(1)
-        root.addLayout(row_secondary)
+
+        self.btn_help = QPushButton("Help")
+        self.btn_help.clicked.connect(self._show_help)
+        self.btn_help.setToolTip("使用帮助")
+        toolbar.addWidget(self.btn_help)
+
+        root.addLayout(toolbar)
 
         self.empty_hint = QLabel(
-            "还没有游戏？在第一行「库」分组中点击【添加目录】导入游戏文件夹\n"
-            ">> 点击【添加目录】开始导入 <<"
+            "还没有游戏？点击上方「添加目录」按钮开始导入游戏库"
         )
         self.empty_hint.setAlignment(Qt.AlignCenter)
         root.addWidget(self.empty_hint)
@@ -347,6 +358,7 @@ class MainWindow(
 
         root.addLayout(actions)
         self.status = QLabel("就绪")
+        self.status.setObjectName("statusBar")
         self.status.setAlignment(Qt.AlignLeft)
         root.addWidget(self.status)
 
@@ -392,8 +404,8 @@ class MainWindow(
 
     def _refresh_startup_state(self) -> None:
         enabled = self.system_service.is_startup_enabled()
-        self.btn_startup.setChecked(enabled)
-        self.btn_startup.setText(f"开机启动: {'ON' if enabled else 'OFF'}")
+        self.act_startup.setChecked(enabled)
+        self.act_startup.setText(f"开机启动: {'ON' if enabled else 'OFF'}")
 
     def _refresh_user_picker(self) -> None:
         users = self.db.list_users()
@@ -547,3 +559,161 @@ class MainWindow(
             self._play_history_window.setStyleSheet(new_stylesheet)
         if hasattr(self, '_save_manager_window') and self._save_manager_window:
             self._save_manager_window.setStyleSheet(new_stylesheet)
+
+    def _open_settings(self) -> None:
+        """打开综合设置对话框"""
+        from app.ui.dialogs import SettingsDialog
+        
+        dialog = SettingsDialog(self.db, self)
+        dialog.settings_changed.connect(self._on_settings_changed)
+        dialog.exec()
+    
+    def _show_help(self) -> None:
+        """显示使用帮助"""
+        from PySide6.QtWidgets import QDialog, QTextBrowser, QDialogButtonBox
+        
+        dialog = QDialog(self)
+        dialog.setWindowTitle("使用帮助")
+        dialog.setMinimumSize(520, 480)
+        layout = QVBoxLayout(dialog)
+        
+        browser = QTextBrowser()
+        browser.setOpenExternalLinks(True)
+        browser.setHtml("""
+        <style>
+            body { font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif; color: #C8D0DC; }
+            h2 { color: #6A9FD8; font-size: 16px; border-bottom: 1px solid #3D4759; padding-bottom: 4px; }
+            h3 { color: #8AB4E0; font-size: 13px; }
+            p, li { font-size: 12px; line-height: 1.6; }
+            ul { padding-left: 20px; }
+            .shortcut { background: #2E3644; padding: 2px 6px; border-radius: 3px; font-family: monospace; }
+        </style>
+        <h2>快速入门</h2>
+        <ol>
+            <li><b>添加目录</b> — 点击「添加目录」，选择你的游戏根目录</li>
+            <li><b>导入游戏</b> — 点击「导入游戏」→「全量扫描」，自动识别目录下的游戏</li>
+            <li><b>启动游戏</b> — 双击游戏卡片即可启动</li>
+        </ol>
+        
+        <h2>工具栏功能</h2>
+        <ul>
+            <li><b>搜索框</b> — 输入关键词实时筛选游戏</li>
+            <li><b>仅收藏</b> — 只显示已收藏的游戏</li>
+            <li><b>添加目录</b> — 添加新的游戏扫描目录</li>
+            <li><b>导入游戏</b> — 全量扫描或增量扫描新游戏</li>
+            <li><b>VNDB导入</b> — 从VNDB/Bangumi批量获取封面和元数据</li>
+            <li><b>网格/列表视图</b> — 切换显示模式</li>
+            <li><b>🎲随机</b> — 随机选一个游戏，再按从剩余中选</li>
+            <li><b>封面策略</b> — 切换封面获取方式（仅本地/本地优先/网图优先）</li>
+        </ul>
+        
+        <h2>右键菜单</h2>
+        <ul>
+            <li><b>启动游戏</b> — 正常启动</li>
+            <li><b>LE转区启动</b> — 通过Locale Emulator转区运行（需先配置LE路径）</li>
+            <li><b>管理员启动</b> — 以管理员权限运行</li>
+            <li><b>游戏详情</b> — 查看完整信息和游玩记录</li>
+            <li><b>存档管理</b> — 备份/还原存档</li>
+            <li><b>收藏</b> — 收藏/取消收藏</li>
+            <li><b>编辑名称/路径</b> — 修改游戏名称或启动exe路径</li>
+            <li><b>封面 → 设置封面</b> — 手动选择本地图片作为封面</li>
+            <li><b>封面 → 重新获取封面</b> — 从VNDB重新下载封面</li>
+            <li><b>创建桌面快捷方式</b> — 在桌面生成快捷方式</li>
+            <li><b>分配分类</b> — 将游戏归入自定义分类</li>
+        </ul>
+        
+        <h2>快捷键</h2>
+        <ul>
+            <li><span class="shortcut">双击</span> 启动游戏</li>
+            <li><span class="shortcut">右键</span> 打开上下文菜单</li>
+            <li><span class="shortcut">Ctrl+F</span> 聚焦搜索框</li>
+            <li><span class="shortcut">Ctrl+I</span> 打开游戏详情</li>
+        </ul>
+        
+        <h2>设置说明</h2>
+        <ul>
+            <li><b>双击打开方式</b> — 可选「普通启动」「强制LE转区」「智能模式（记住上次）」</li>
+            <li><b>封面策略</b> — 「仅本地」只使用本地图片；「本地优先」优先本地；「网图优先」优先VNDB</li>
+            <li><b>LE路径</b> — 在「更多」→「设置」中配置LEProc.exe路径</li>
+        </ul>
+        
+        <h2>常见问题</h2>
+        <ul>
+            <li><b>游戏没有被识别？</b> — 确保目录下有.exe文件，尝试重新扫描</li>
+            <li><b>启动exe不对？</b> — 右键→「编辑名称/路径」修改启动路径</li>
+            <li><b>封面不显示？</b> — 切换封面策略为「本地优先」或右键→「封面」→「重新获取」</li>
+            <li><b>LE转区启动灰色？</b> — 需先在设置中配置LEProc.exe路径</li>
+        </ul>
+        
+        <p style="color: #5A6474; margin-top: 16px;">
+        项目主页：<a href="https://github.com/chunyangluo/Local-Galgame-Manager" style="color: #6A9FD8;">GitHub</a>
+        </p>
+        """)
+        layout.addWidget(browser)
+        
+        btn_box = QDialogButtonBox(QDialogButtonBox.Ok)
+        btn_box.accepted.connect(dialog.accept)
+        layout.addWidget(btn_box)
+        
+        dialog.exec()
+    
+    def _on_settings_changed(self) -> None:
+        """设置改变后的回调"""
+        # 刷新封面获取模式
+        self.cover_fetch_mode = self.db.get_cover_fetch_mode()
+        self.cover_manager.cover_fetch_mode = self.cover_fetch_mode
+        self._apply_cover_fetch_mode_ui()
+        
+        # 刷新自动备份设置
+        self.auto_backup_before_launch = self.db.get_auto_backup_before_launch()
+        self._apply_auto_backup_launch_ui()
+        
+        # 刷新LE可用状态
+        self.status.setText("设置已更新")
+
+    def _random_pick_game(self) -> None:
+        """从过滤后的游戏列表中随机选择一个游戏"""
+        if not self.filtered_games:
+            QMessageBox.information(self, "随机选择", "当前没有可选择的游戏")
+            return
+        
+        # 获取可用游戏（排除已选过的）
+        available = [g for g in self.filtered_games if g.id not in self._random_excluded_ids]
+        
+        if not available:
+            # 所有游戏都已选择过，重置排除列表
+            self._random_excluded_ids.clear()
+            available = list(self.filtered_games)
+        
+        import random
+        selected = random.choice(available)
+        self._random_excluded_ids.add(selected.id)
+        
+        # 选中文本框中的游戏并滚动到可见位置
+        if self._is_grid_view:
+            self._game_paged_grid.select_game_by_id(selected.id)
+        else:
+            for i in range(self.games_list.count()):
+                item = self.games_list.item(i)
+                if item.data(Qt.UserRole) == selected.id:
+                    item.setSelected(True)
+                    self.games_list.scrollToItem(item)
+                    break
+        
+        # 更新状态栏
+        remaining = len(available) - 1
+        msg = f"🎲 随机选择了「{selected.custom_name or selected.name}」"
+        if remaining > 0:
+            msg += f"，还有 {remaining} 个游戏可选"
+        else:
+            msg += "，所有游戏已选完，点击重置"
+        self.status.setText(msg)
+        
+        # 显示游戏信息
+        QMessageBox.information(
+            self,
+            "随机选择",
+            f"选中了：{selected.custom_name or selected.name}\n\n"
+            f"剩余可选：{remaining} 个游戏\n"
+            f"（再次点击从剩余游戏中选择）"
+        )

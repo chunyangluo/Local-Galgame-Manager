@@ -19,7 +19,7 @@ class ScanMixin:
     btn_scan: object
     btn_vndb_import: object
     btn_add_root: object
-    btn_manage_roots: object
+    act_manage_roots: object
     btn_refresh: object
     btn_more: object
     btn_cancel_scan: object
@@ -181,7 +181,7 @@ class ScanMixin:
         self.btn_scan.setEnabled(False)
         self.btn_vndb_import.setEnabled(False)
         self.btn_add_root.setEnabled(False)
-        self.btn_manage_roots.setEnabled(False)
+        self.act_manage_roots.setEnabled(False)
         self.btn_refresh.setEnabled(False)
         self.btn_more.setEnabled(False)
         self.btn_cancel_scan.setEnabled(True)
@@ -193,7 +193,7 @@ class ScanMixin:
         self.btn_scan.setEnabled(True)
         self.btn_vndb_import.setEnabled(True)
         self.btn_add_root.setEnabled(True)
-        self.btn_manage_roots.setEnabled(True)
+        self.act_manage_roots.setEnabled(True)
         self.btn_refresh.setEnabled(True)
         self.btn_more.setEnabled(True)
         self.btn_cancel_scan.setVisible(False)

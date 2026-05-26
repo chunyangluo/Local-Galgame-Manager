@@ -156,12 +156,22 @@ class GameCardWidget(QWidget):
     def _build_placeholder_cover(self, label: str = "NO COVER") -> QPixmap:
         size = self.cover.size()
         pix = QPixmap(size)
-        pix.fill(QColor("#252C36"))
+        # 渐变背景
+        gradient = QLinearGradient(0, 0, 0, size.height())
+        gradient.setColorAt(0.0, QColor("#2A3242"))
+        gradient.setColorAt(1.0, QColor("#1C2230"))
+        pix.fill(QColor("#1C2230"))
         painter = QPainter(pix)
         painter.setRenderHint(QPainter.Antialiasing)
-        painter.setPen(QPen(QColor("#465061"), 1))
-        painter.drawRect(0, 0, size.width() - 1, size.height() - 1)
-        painter.setPen(QPen(QColor("#90A0B8"), 1))
+        painter.fillRect(pix.rect(), gradient)
+        # 虚线边框
+        painter.setPen(QPen(QColor("#3D4A5C"), 1, Qt.DashLine))
+        painter.drawRoundedRect(4, 4, size.width() - 8, size.height() - 8, 8, 8)
+        # 图标文字
+        painter.setPen(QPen(QColor("#6B7D94"), 1))
+        font = painter.font()
+        font.setPointSize(11)
+        painter.setFont(font)
         painter.drawText(pix.rect(), Qt.AlignCenter, label)
         painter.end()
         return self._with_bottom_gradient(pix)

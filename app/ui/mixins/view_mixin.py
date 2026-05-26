@@ -26,7 +26,6 @@ class ViewMixin:
     empty_hint: object
     btn_add_root: object
     btn_toggle_view: object
-    btn_game_detail: object
     games_list: QListWidget
     _game_paged_grid: object
     _library_stack: object
@@ -182,7 +181,6 @@ class ViewMixin:
     def _update_action_state(self) -> None:
         has_selection = self._selected_game() is not None
         self.btn_refresh.setEnabled(True)
-        self.btn_game_detail.setEnabled(has_selection)
         if has_selection:
             if self._is_grid_view:
                 self._game_paged_grid.set_focus_chain()

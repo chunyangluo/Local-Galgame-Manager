@@ -162,13 +162,10 @@ class GameActionMixin:
 
     def _apply_auto_backup_launch_ui(self) -> None:
         enabled = bool(self.auto_backup_before_launch)
-        self.btn_auto_backup_launch.setChecked(enabled)
-        self.btn_auto_backup_launch.setText(
+        self.act_auto_backup.setChecked(enabled)
+        self.act_auto_backup.setText(
             f"启动前备份: {'ON' if enabled else 'OFF'}"
         )
-        self.btn_auto_backup_launch.setProperty("active", enabled)
-        self.btn_auto_backup_launch.style().unpolish(self.btn_auto_backup_launch)
-        self.btn_auto_backup_launch.style().polish(self.btn_auto_backup_launch)
 
     def _toggle_auto_backup_before_launch(self) -> None:
         self.auto_backup_before_launch = not self.auto_backup_before_launch
@@ -259,22 +256,11 @@ class GameActionMixin:
         menu = QMenu(self)
         menu.setToolTipsVisible(True)
 
-        launch_group = menu.addSection("启动")
-        launch_group.setEnabled(False)
-
+        # 启动
         launch_action = menu.addAction("启动游戏")
         launch_action.triggered.connect(
             lambda checked=False, gid=game.id: self.launch_game_by_id(gid, message_parent=self)
         )
-        launch_action.setToolTip("正常权限启动当前游戏")
-
-        admin_action = menu.addAction("管理员启动")
-        admin_action.triggered.connect(
-            lambda checked=False, gid=game.id: self.launch_game_by_id(
-                gid, as_admin=True, message_parent=self
-            )
-        )
-        admin_action.setToolTip("以管理员权限启动当前游戏")
 
         le_action = menu.addAction("LE 转区启动")
         le_action.triggered.connect(
@@ -283,68 +269,62 @@ class GameActionMixin:
             )
         )
         le_usable = self.is_locale_emulator_usable()
-        le_action.setToolTip(
-            "通过 Locale Emulator (LEProc) 转区运行。"
-            + (" 未配置 LE 时点击将提示设置路径。" if not le_usable else "")
+        le_action.setEnabled(le_usable)
+        if not le_usable:
+            le_action.setToolTip("未配置 Locale Emulator，请在「更多」→「设置」中配置")
+        else:
+            le_action.setToolTip("通过 Locale Emulator 转区运行")
+
+        admin_action = menu.addAction("管理员启动")
+        admin_action.triggered.connect(
+            lambda checked=False, gid=game.id: self.launch_game_by_id(
+                gid, as_admin=True, message_parent=self
+            )
         )
+        admin_action.setToolTip("以管理员权限启动")
 
         menu.addSeparator()
 
+        # 查看
         detail_action = menu.addAction("游戏详情…")
         detail_action.triggered.connect(lambda checked=False, gid=game.id: self.open_game_detail(gid))
-        detail_action.setToolTip("查看简介、评分、游玩记录、调试信息与快捷操作")
 
         save_mgr_action = menu.addAction("存档管理…")
         save_mgr_action.triggered.connect(lambda checked=False, gid=game.id: self.open_save_manager(gid))
-        save_mgr_action.setToolTip(
-            "指定存档目录、备份与还原 ZIP；可配置 2DFan 线索库并在自动发现中合并社区路径"
-        )
 
         menu.addSeparator()
 
-        edit_group = menu.addSection("编辑")
-        edit_group.setEnabled(False)
+        # 编辑
+        fav_text = "取消收藏" if game.favorite else "收藏"
+        fav_action = menu.addAction(fav_text)
+        fav_action.triggered.connect(lambda checked=False, g=game: self._toggle_favorite_for_record(g))
 
         edit_action = menu.addAction("编辑名称/路径")
         edit_action.triggered.connect(
             lambda checked=False, gid=game.id: self.edit_game_identity_for_game_id(gid)
         )
-        edit_action.setToolTip("手动修改游戏名称或启动文件路径")
 
-        fix_action = menu.addAction("修正启动EXE")
-        fix_action.triggered.connect(lambda checked=False, g=game: self._fix_launch_exe_for_record(g))
-        fix_action.setToolTip("重新识别或手动指定游戏启动文件")
-
-        fav_text = "取消收藏" if game.favorite else "收藏"
-        fav_action = menu.addAction(fav_text)
-        fav_action.triggered.connect(lambda checked=False, g=game: self._toggle_favorite_for_record(g))
-        fav_action.setToolTip("切换当前游戏的收藏状态")
-
-        cover_action = menu.addAction("设置封面")
+        cover_submenu = menu.addMenu("封面")
+        cover_action = cover_submenu.addAction("设置封面")
         cover_action.triggered.connect(
             lambda checked=False, gid=game.id: self.set_custom_cover_for_game_id(gid)
         )
-        cover_action.setToolTip("为当前游戏指定本地封面图")
-        retry_cover_action = menu.addAction("重新获取封面")
+        retry_cover_action = cover_submenu.addAction("重新获取封面")
         retry_cover_action.triggered.connect(
             lambda checked=False, g=game: self._retry_cover_for_record(g)
         )
-        retry_cover_action.setToolTip("根据 VNDB 图源在后台重新下载封面缓存")
 
         menu.addSeparator()
 
-        manage_group = menu.addSection("管理")
-        manage_group.setEnabled(False)
+        # 管理
         shortcut_action = menu.addAction("创建桌面快捷方式")
         shortcut_action.triggered.connect(
             lambda checked=False, g=game: self._create_shortcut_for_record(g)
         )
-        shortcut_action.setToolTip("在桌面创建当前游戏的快捷方式")
 
         assign_action = menu.addAction("分配分类")
         assign_action.triggered.connect(
             lambda checked=False, g=game: self._assign_categories_for_record(g)
         )
-        assign_action.setToolTip("将当前游戏加入一个或多个分类")
 
         menu.exec(menu_anchor if menu_anchor is not None else QCursor.pos())

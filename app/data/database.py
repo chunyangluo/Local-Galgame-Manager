@@ -312,6 +312,14 @@ class Database:
             self.conn.execute(
                 "ALTER TABLE settings ADD COLUMN twodfan_hints_db_path TEXT DEFAULT ''"
             )
+        if "double_click_action" not in cols:
+            self.conn.execute(
+                "ALTER TABLE settings ADD COLUMN double_click_action TEXT DEFAULT 'normal'"
+            )
+        if "last_launch_mode" not in cols:
+            self.conn.execute(
+                "ALTER TABLE settings ADD COLUMN last_launch_mode TEXT DEFAULT ''"
+            )
 
     def ensure_default_user(self) -> int:
         row = self.conn.execute("SELECT current_user_id FROM settings WHERE id = 1").fetchone()
@@ -450,6 +458,46 @@ class Database:
         )
         self.conn.commit()
 
+    def get_double_click_action(self) -> str:
+        """获取双击打开游戏的方式: normal/force_le/smart"""
+        row = self.conn.execute(
+            "SELECT double_click_action FROM settings WHERE id = 1"
+        ).fetchone()
+        if row is None or row["double_click_action"] is None:
+            return "normal"
+        return str(row["double_click_action"]).strip().lower()
+
+    def set_double_click_action(self, action: str) -> None:
+        """设置双击打开游戏的方式: normal/force_le/smart"""
+        valid_actions = ("normal", "force_le", "smart")
+        if action not in valid_actions:
+            action = "normal"
+        self.conn.execute(
+            "UPDATE settings SET double_click_action = ?, updated_at = ? WHERE id = 1",
+            (action, datetime.utcnow().isoformat()),
+        )
+        self.conn.commit()
+
+    def get_last_launch_mode(self) -> str:
+        """获取上一次启动游戏的方式: normal/le"""
+        row = self.conn.execute(
+            "SELECT last_launch_mode FROM settings WHERE id = 1"
+        ).fetchone()
+        if row is None or row["last_launch_mode"] is None:
+            return "normal"
+        return str(row["last_launch_mode"]).strip().lower()
+
+    def set_last_launch_mode(self, mode: str) -> None:
+        """设置上一次启动游戏的方式: normal/le"""
+        valid_modes = ("normal", "le")
+        if mode not in valid_modes:
+            mode = "normal"
+        self.conn.execute(
+            "UPDATE settings SET last_launch_mode = ?, updated_at = ? WHERE id = 1",
+            (mode, datetime.utcnow().isoformat()),
+        )
+        self.conn.commit()
+
     def get_ui_preferences(self) -> dict:
         row = self.conn.execute(
             "SELECT ui_preferences FROM settings WHERE id = 1"
@@ -494,8 +542,8 @@ class Database:
             VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT(root_dir) DO UPDATE SET
                 name = COALESCE(NULLIF(games.custom_name, ''), excluded.name),
-                launch_exe = excluded.launch_exe,
-                cover_path = COALESCE(excluded.cover_path, games.cover_path),
+                launch_exe = COALESCE(NULLIF(games.custom_launch_exe, ''), excluded.launch_exe),
+                cover_path = COALESCE(NULLIF(games.custom_cover_path, ''), COALESCE(excluded.cover_path, games.cover_path)),
                 updated_at = excluded.updated_at
             """,
             (name, root_dir, launch_exe, cover_path, now, now),
@@ -543,8 +591,8 @@ class Database:
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(root_dir) DO UPDATE SET
                     name = COALESCE(NULLIF(games.custom_name, ''), excluded.name),
-                    launch_exe = excluded.launch_exe,
-                    cover_path = COALESCE(excluded.cover_path, games.cover_path),
+                    launch_exe = COALESCE(NULLIF(games.custom_launch_exe, ''), excluded.launch_exe),
+                    cover_path = COALESCE(NULLIF(games.custom_cover_path, ''), COALESCE(excluded.cover_path, games.cover_path)),
                     vndb_id = COALESCE(excluded.vndb_id, games.vndb_id),
                     title_original = COALESCE(excluded.title_original, games.title_original),
                     title_localized = COALESCE(excluded.title_localized, games.title_localized),

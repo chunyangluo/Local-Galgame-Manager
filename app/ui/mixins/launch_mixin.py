@@ -52,8 +52,19 @@ class LaunchMixin:
         *,
         as_admin: bool = False,
         locale_emulator: bool = False,
+        force_normal: bool = False,
         message_parent=None,
     ) -> None:
+        """
+        启动游戏
+        
+        Args:
+            game_id: 游戏ID
+            as_admin: 是否以管理员运行
+            locale_emulator: 是否使用LE转区（会覆盖智能设置）
+            force_normal: 是否强制使用普通模式（会覆盖智能设置）
+            message_parent: 消息框父窗口
+        """
         if self._is_game_launching(game_id):
             self.status.setText("该游戏正在启动中，请勿重复点击")
             return
@@ -65,7 +76,20 @@ class LaunchMixin:
         if game is None:
             QMessageBox.warning(parent, "未找到游戏", "该游戏记录不存在。")
             return
-        if locale_emulator:
+        
+        # 确定启动方式
+        use_le = locale_emulator
+        if not use_le and not force_normal:
+            # 检查是否使用智能模式
+            double_click_action = self.db.get_double_click_action()
+            if double_click_action == "force_le":
+                use_le = True
+            elif double_click_action == "smart":
+                # 智能模式：使用上一次启动的方式
+                last_mode = self.db.get_last_launch_mode()
+                use_le = (last_mode == "le")
+        
+        if use_le:
             if not self.is_locale_emulator_usable():
                 r = QMessageBox.question(
                     parent,
@@ -80,27 +104,27 @@ class LaunchMixin:
                 if r == QMessageBox.StandardButton.Yes:
                     self._open_locale_emulator_settings()
                 return
-        le_path = self.db.get_locale_emulator_leproc_path().strip() if locale_emulator else ""
+        le_path = self.db.get_locale_emulator_leproc_path().strip() if use_le else ""
         if self.auto_backup_before_launch:
             self._auto_backup_save_before_launch(game)
         uid = self.current_user_id
         self._add_launching_game(game.id)
         self.status.setText(
-            f"正在通过 LE 启动: {game.name}…" if locale_emulator else f"正在启动: {game.name}…"
+            f"正在通过 LE 启动: {game.name}…" if use_le else f"正在启动: {game.name}…"
         )
         QApplication.processEvents()
         log = logging.getLogger(__name__)
         log.info(
             "Launch queued game_id=%s le=%s admin=%s exe=%s",
             game_id,
-            locale_emulator,
+            use_le,
             as_admin,
             game.launch_exe,
         )
         task = LaunchGameTask(
             self.launcher,
             launch_exe=game.launch_exe,
-            locale_emulator=locale_emulator,
+            locale_emulator=use_le,
             le_proc_path=le_path,
             as_admin=as_admin,
             game_id=game.id,
@@ -108,8 +132,8 @@ class LaunchMixin:
             signal_parent=self,
         )
         task.signals.finished.connect(
-            lambda gid, dur, name, u=uid, mp=message_parent: self._on_game_launch_finished(
-                u, mp, gid, dur, name
+            lambda gid, dur, name, used_le_flag, u=uid, mp=message_parent: self._on_game_launch_finished(
+                u, mp, gid, dur, name, used_le_flag
             ),
             Qt.QueuedConnection,
         )
@@ -126,11 +150,18 @@ class LaunchMixin:
         game_id: int,
         duration: int,
         game_name: str,
+        used_le: bool = False,
     ) -> None:
         self._remove_launching_game(game_id)
         parent = self._message_box_parent(message_parent)
         try:
+            # 记录游玩
             self.db.record_play(user_id, game_id, duration)
+            
+            # 记录启动方式（用于智能模式）
+            launch_mode = "le" if used_le else "normal"
+            self.db.set_last_launch_mode(launch_mode)
+            
             self.refresh_games()
             self.status.setText(f"已退出: {game_name}，本次时长 {duration}s")
         except Exception as exc:
@@ -154,7 +185,7 @@ class LaunchMixin:
         self.launch_game_by_id(game.id, as_admin=as_admin)
 
     def _open_locale_emulator_settings(self) -> None:
-        from PySide6.QtWidgets import QMessageBox
+        from PySide6.QtWidgets import QMessageBox, QDialog
         from app.ui.dialogs import LocaleEmulatorSettingsDialog
 
         cur = self.db.get_locale_emulator_leproc_path()

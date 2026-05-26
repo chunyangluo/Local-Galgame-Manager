@@ -6,7 +6,7 @@ from app.core.launcher import GameLauncher
 
 
 class LaunchGameSignals(QObject):
-    finished = Signal(int, int, str)
+    finished = Signal(int, int, str, bool)  # game_id, duration, game_name, used_le
     failed = Signal(str)
 
 
@@ -41,6 +41,6 @@ class LaunchGameTask(QRunnable):
                 )
             else:
                 duration = self._launcher.launch(self._launch_exe, as_admin=self._as_admin)
-            self.signals.finished.emit(self._game_id, duration, self._game_name)
+            self.signals.finished.emit(self._game_id, duration, self._game_name, self._locale_emulator)
         except Exception as exc:  # pragma: no cover
             self.signals.failed.emit(str(exc))
