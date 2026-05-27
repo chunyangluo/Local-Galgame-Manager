@@ -114,6 +114,7 @@ class ThemeSettingsDialog(QDialog):
         accent_row.addWidget(self._accent_color_label)
         
         accent_picker_button = QPushButton("选择颜色")
+        accent_picker_button.setProperty("btnRole", "secondary")
         accent_picker_button.clicked.connect(self._pick_accent_color)
         accent_picker_button.setFixedWidth(120)
         accent_row.addWidget(accent_picker_button)
@@ -290,9 +291,13 @@ class ThemeSettingsDialog(QDialog):
                 border-radius: 8px;
                 padding: 4px;
                 text-align: bottom;
+                color: {preset.text_primary};
+                font-weight: 700;
+                font-size: 11px;
             }}
             QPushButton:hover {{
                 border-color: {preset.accent_color};
+                color: {preset.text_primary};
             }}
         """)
         
@@ -342,6 +347,7 @@ class ThemeSettingsDialog(QDialog):
         layout.addWidget(color_label, row, 1)
         
         button = QPushButton("选择")
+        button.setProperty("btnRole", "secondary")
         button.setFixedWidth(80)
         button.clicked.connect(lambda checked, k=key, cl=color_label: self._pick_custom_color(k, cl))
         layout.addWidget(button, row, 2)

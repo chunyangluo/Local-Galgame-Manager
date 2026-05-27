@@ -141,7 +141,21 @@ class LaunchMixin:
             lambda msg, mp=message_parent: self._on_game_launch_failed(mp, msg),
             Qt.QueuedConnection,
         )
+        task.signals.window_title_captured.connect(
+            lambda gid, title: self._on_window_title_captured(gid, title),
+            Qt.QueuedConnection,
+        )
         self._launch_pool.start(task)
+
+    def _on_window_title_captured(self, game_id: int, window_title: str) -> None:
+        """游戏窗口标题捕获回调：缓存到数据库。"""
+        try:
+            self.db.update_game_window_title(game_id, window_title)
+            logging.getLogger(__name__).info(
+                "Window title cached: game_id=%s title=%s", game_id, window_title
+            )
+        except Exception:
+            logging.getLogger(__name__).debug("Failed to cache window title", exc_info=True)
 
     def _on_game_launch_finished(
         self,

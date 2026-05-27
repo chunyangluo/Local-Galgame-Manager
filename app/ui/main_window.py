@@ -247,6 +247,11 @@ class MainWindow(
         act_twodfan.setToolTip("配置存档路径线索库")
         menu.addAction(act_twodfan)
 
+        act_twodfan_crawl = QAction("2DFan 一键爬取…", self)
+        act_twodfan_crawl.triggered.connect(self._start_twodfan_crawl)
+        act_twodfan_crawl.setToolTip("从 2dfan.com 爬取存档位置线索，自动配置线索库")
+        menu.addAction(act_twodfan_crawl)
+
         menu.addSeparator()
 
         self.act_startup = QAction("开机启动", self)

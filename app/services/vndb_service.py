@@ -104,6 +104,7 @@ class VndbOutcome:
     record: VndbRecord | None = None
     error_kind: str | None = None
     error_detail: str | None = None
+    candidates: list[VndbRecord] | None = None  # 多个候选结果供选择
 
 
 _VERSION_TAG_RE = re.compile(
@@ -111,17 +112,48 @@ _VERSION_TAG_RE = re.compile(
     re.IGNORECASE,
 )
 _BRACKET_RE = re.compile(r"[\[\(\【\(].*?[\]\)\】\)]")
+# VNDB 检索用：移除几乎所有非文字符号
 _SYMBOL_RE = re.compile(r"[^\w\u4e00-\u9fff\u3040-\u30ff\u3400-\u4dbf]+", re.UNICODE)
+# 本地展示用：保留游戏常用符号（- ~ ! ? ☆ ♡ 等）
+_DISPLAY_SYMBOL_RE = re.compile(
+    r"[^\w\u4e00-\u9fff\u3040-\u30ff\u3400-\u4dbf\-\~\!\?☆♡★♥♦♠♣♪●○◎◇◆□■△▽▽△]+",
+    re.UNICODE,
+)
+# 平台/语言标识
+_PLATFORM_TAG_RE = re.compile(
+    r"\b(chs|cht|cn|jp|en|kr|jpn|eng|kor|中文|简体|繁体|日文|英文|汉化|全cg|存档|绿色版|免安装)\b",
+    re.IGNORECASE,
+)
 
 
 def clean_title_for_search(name: str) -> str:
-    """Normalize a noisy folder name into a clean search query."""
+    """Normalize a noisy folder name into a clean VNDB search query.
 
+    Aggressive cleaning: strips brackets, version tags, platform tags,
+    and most symbols. Designed for maximum API match rate.
+    """
     if not name:
         return ""
     text = _BRACKET_RE.sub(" ", name)
     text = _VERSION_TAG_RE.sub(" ", text)
+    text = _PLATFORM_TAG_RE.sub(" ", text)
     text = _SYMBOL_RE.sub(" ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def clean_title_for_display(name: str) -> str:
+    """Light cleaning for local display: preserves game-common symbols.
+
+    Only strips brackets, version tags, and platform/language tags,
+    but keeps characters like - ~ ! ? ☆ ♡ that are part of the title.
+    """
+    if not name:
+        return ""
+    text = _BRACKET_RE.sub(" ", name)
+    text = _VERSION_TAG_RE.sub(" ", text)
+    text = _PLATFORM_TAG_RE.sub(" ", text)
+    text = _DISPLAY_SYMBOL_RE.sub(" ", text)
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
@@ -167,48 +199,92 @@ class VndbService:
 
     # ---------------------------------------------------------------- public
 
-    def search_title(self, query: str, limit: int = 1) -> VndbOutcome:
+    def search_title(self, query: str, limit: int = 1, *, extra_queries: list[str] | None = None) -> VndbOutcome:
         """Search by title and return the best match (or a structured error).
 
         ``limit`` controls how many candidates the API should consider
         before we pick the top result. We always normalize and return
         a single :class:`VndbOutcome`.
-        """
 
+        ``extra_queries`` allows providing additional search terms
+        (e.g. window title) for multi-keyword parallel search.
+        """
         cleaned = clean_title_for_search(query)
-        if not cleaned:
+        if not cleaned and not extra_queries:
             return VndbOutcome(query=query, success=False, error_kind=ERR_NO_MATCH,
                                error_detail="empty query")
         if requests is None or self._session is None:
             return VndbOutcome(query=query, success=False, error_kind=ERR_DEPENDENCY,
                                error_detail="requests package not installed")
 
-        body = {
-            "filters": ["search", "=", cleaned],
-            "fields": _VN_FIELDS,
-            "results": max(1, min(limit, 25)),
-            "sort": "searchrank",
-        }
-        outcome = self._post_json(VNDB_VN_ENDPOINT, body, query)
-        if not outcome.success:
+        # 收集所有检索词（去重、去空）
+        all_queries: list[str] = []
+        if cleaned:
+            all_queries.append(cleaned)
+        if extra_queries:
+            for eq in extra_queries:
+                eq_cleaned = clean_title_for_search(eq)
+                if eq_cleaned and eq_cleaned not in all_queries:
+                    all_queries.append(eq_cleaned)
+
+        # 依次用每个检索词查询，取第一个成功结果
+        best_outcome: VndbOutcome | None = None
+        candidate_records: list[VndbRecord] = []
+        
+        for q in all_queries:
+            body = {
+                "filters": ["search", "=", q],
+                "fields": _VN_FIELDS,
+                "results": max(5, min(limit, 25)),  # 获取更多候选结果
+                "sort": "searchrank",
+            }
+            outcome = self._post_json(VNDB_VN_ENDPOINT, body, query)
+            if outcome.success and outcome.record is not None:
+                best_outcome = outcome
+                # 收集所有候选记录
+                if hasattr(outcome, 'candidates') and outcome.candidates:
+                    candidate_records.extend(outcome.candidates)
+                candidate_records.append(outcome.record)
+                break
+            # 记录第一个有意义的错误
+            if best_outcome is None:
+                best_outcome = outcome
+
+        if best_outcome is None:
+            best_outcome = VndbOutcome(query=query, success=False, error_kind=ERR_NO_MATCH,
+                                       error_detail="no candidates from any query")
+
+        if not best_outcome.success:
             # Fallback: use Bangumi as secondary metadata source.
-            bgm_outcome = self._search_bangumi(cleaned, original_query=query, limit=limit)
-            if bgm_outcome.success:
-                return bgm_outcome
-            return outcome
+            for q in all_queries:
+                bgm_outcome = self._search_bangumi(q, original_query=query, limit=limit)
+                if bgm_outcome.success:
+                    return bgm_outcome
+            return best_outcome
+
+        # 设置候选列表（去重）
+        seen_ids = set()
+        unique_candidates = []
+        for rec in candidate_records:
+            if rec.vndb_id not in seen_ids:
+                seen_ids.add(rec.vndb_id)
+                unique_candidates.append(rec)
+        best_outcome.candidates = unique_candidates[:10]  # 最多保留10个候选
+
         # VNDB hit but sometimes lacks usable cover; enrich with Bangumi image.
-        if outcome.record is not None and not outcome.record.image_url:
-            bgm_outcome = self._search_bangumi(cleaned, original_query=query, limit=limit)
-            if bgm_outcome.success and bgm_outcome.record is not None:
-                bgm = bgm_outcome.record
-                if bgm.image_url:
-                    outcome.record.image_url = bgm.image_url
-                if not outcome.record.title_localized and bgm.title_localized:
-                    outcome.record.title_localized = bgm.title_localized
-                if not outcome.record.title_original and bgm.title_original:
-                    outcome.record.title_original = bgm.title_original
-        # ``outcome.record`` is set when normalize is successful.
-        return outcome
+        if best_outcome.record is not None and not best_outcome.record.image_url:
+            for q in all_queries:
+                bgm_outcome = self._search_bangumi(q, original_query=query, limit=limit)
+                if bgm_outcome.success and bgm_outcome.record is not None:
+                    bgm = bgm_outcome.record
+                    if bgm.image_url:
+                        best_outcome.record.image_url = bgm.image_url
+                    if not best_outcome.record.title_localized and bgm.title_localized:
+                        best_outcome.record.title_localized = bgm.title_localized
+                    if not best_outcome.record.title_original and bgm.title_original:
+                        best_outcome.record.title_original = bgm.title_original
+                    break
+        return best_outcome
 
     def fetch_details(self, vndb_id: str) -> VndbOutcome:
         """Fetch full record for a known VNDB id."""

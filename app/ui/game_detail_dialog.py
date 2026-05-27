@@ -3,11 +3,12 @@
 from __future__ import annotations
 
 import sys
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QPixmap
+from PySide6.QtCore import Qt, QMimeData
+from PySide6.QtGui import QPixmap, QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -22,6 +23,8 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
     QTextEdit,
     QVBoxLayout,
+    QWidget,
+    QSizePolicy,
 )
 
 from app.data.database import Database, GameRecord, PlayRecordEntry
@@ -71,8 +74,13 @@ def _fmt_duration(sec: int) -> str:
     return f"{s}秒"
 
 
-def _fmt_total_seconds(sec: int) -> str:
-    return _fmt_duration(sec) + f"（共 {sec} 秒）"
+def _fmt_datetime(dt_str: str) -> str:
+    """Convert ISO datetime to local format."""
+    try:
+        dt = datetime.fromisoformat(dt_str.replace("Z", "+00:00"))
+        return dt.strftime("%Y-%m-%d %H:%M")
+    except (ValueError, TypeError):
+        return dt_str
 
 
 class GameDetailDialog(QDialog):
@@ -82,14 +90,42 @@ class GameDetailDialog(QDialog):
         self._game_id = game_id
         self.setWindowTitle("游戏详情")
         self.resize(920, 680)
+        self.setStyleSheet("""
+            QGroupBox { font-weight: 600; margin-top: 8px; }
+            QLabel { color: #93A1B6; }
+            .meta-label { color: #7FA7D9; font-size: 12px; }
+            .meta-value { color: #F3F6FB; font-size: 12px; }
+            .missing { color: #6B7280; font-style: italic; }
+        """)
 
         root = QVBoxLayout(self)
+
+        top_bar = QHBoxLayout()
+        top_bar.addStretch(1)
+        
+        self._close_btn = QPushButton("✕")
+        self._close_btn.setStyleSheet("""
+            QPushButton { 
+                border: none; 
+                padding: 4px 8px; 
+                color: #93A1B6; 
+                font-size: 16px;
+            }
+            QPushButton:hover { color: #F3F6FB; }
+        """)
+        self._close_btn.clicked.connect(self.reject)
+        top_bar.addWidget(self._close_btn)
+        root.addLayout(top_bar)
 
         top = QHBoxLayout()
         self._cover = QLabel()
         self._cover.setFixedSize(200, 300)
         self._cover.setAlignment(Qt.AlignCenter)
         self._cover.setStyleSheet("background:#252C36;border-radius:8px;")
+        self._cover.setAcceptDrops(True)
+        self._cover.dragEnterEvent = self._on_cover_drag_enter
+        self._cover.dropEvent = self._on_cover_drop
+        self._cover.setToolTip("拖拽图片到此处更换封面")
         top.addWidget(self._cover)
 
         meta_col = QVBoxLayout()
@@ -98,109 +134,158 @@ class GameDetailDialog(QDialog):
         self._title.setStyleSheet("font-size:16px;font-weight:600;color:#F3F6FB;")
         meta_col.addWidget(self._title)
 
-        self._subtitle = QLabel()
-        self._subtitle.setWordWrap(True)
-        self._subtitle.setStyleSheet("color:#93A1B6;font-size:11px;")
-        meta_col.addWidget(self._subtitle)
-
+        meta_grid = QWidget()
+        meta_grid_layout = QVBoxLayout(meta_grid)
+        
+        self._meta_items = []
+        
+        self._title_original = QLabel()
+        self._title_original.setStyleSheet(".meta-label { color: #7FA7D9; } .meta-value { color: #F3F6FB; }")
+        self._meta_items.append(self._title_original)
+        meta_grid_layout.addWidget(self._title_original)
+        
+        self._title_localized = QLabel()
+        self._title_localized.setStyleSheet(".meta-label { color: #7FA7D9; } .meta-value { color: #F3F6FB; }")
+        self._meta_items.append(self._title_localized)
+        meta_grid_layout.addWidget(self._title_localized)
+        
         self._rating_line = QLabel()
-        self._rating_line.setWordWrap(True)
-        meta_col.addWidget(self._rating_line)
-
+        self._rating_line.setStyleSheet(".meta-label { color: #7FA7D9; } .meta-value { color: #F3F6FB; }")
+        self._meta_items.append(self._rating_line)
+        meta_grid_layout.addWidget(self._rating_line)
+        
         self._platforms_line = QLabel()
-        self._platforms_line.setWordWrap(True)
-        meta_col.addWidget(self._platforms_line)
-
+        self._platforms_line.setStyleSheet(".meta-label { color: #7FA7D9; } .meta-value { color: #F3F6FB; }")
+        self._meta_items.append(self._platforms_line)
+        meta_grid_layout.addWidget(self._platforms_line)
+        
         self._languages_line = QLabel()
-        self._languages_line.setWordWrap(True)
-        meta_col.addWidget(self._languages_line)
+        self._languages_line.setStyleSheet(".meta-label { color: #7FA7D9; } .meta-value { color: #F3F6FB; }")
+        self._meta_items.append(self._languages_line)
+        meta_grid_layout.addWidget(self._languages_line)
 
-        self._meta_line = QLabel()
-        self._meta_line.setWordWrap(True)
-        self._meta_line.setStyleSheet("color:#7FA7D9;font-size:11px;")
-        meta_col.addWidget(self._meta_line)
+        meta_grid_layout.addStretch(1)
+        meta_col.addWidget(meta_grid)
+
+        self._meta_source = QLabel()
+        self._meta_source.setStyleSheet("color:#7FA7D9;font-size:11px;")
+        self._meta_source.setToolTip("数据来源说明")
+        meta_col.addWidget(self._meta_source)
 
         self._play_summary = QLabel()
         self._play_summary.setWordWrap(True)
+        self._play_summary.setStyleSheet("color:#93A1B6;font-size:12px;")
         meta_col.addWidget(self._play_summary)
 
         meta_col.addStretch(1)
         top.addLayout(meta_col, 1)
         root.addLayout(top)
 
-        desc_label = QLabel("简介")
-        desc_label.setStyleSheet("font-weight:600;")
-        root.addWidget(desc_label)
+        desc_box = QGroupBox("简介")
+        desc_layout = QVBoxLayout(desc_box)
         self._description = QTextEdit()
         self._description.setReadOnly(True)
         self._description.setMinimumHeight(120)
-        self._description.setPlaceholderText("（无描述）")
-        root.addWidget(self._description, 1)
+        self._description.setPlaceholderText("暂无简介，点击下方「刷新元数据」获取")
+        desc_layout.addWidget(self._description, 1)
+        
+        self._refresh_meta_hint = QLabel()
+        self._refresh_meta_hint.setAlignment(Qt.AlignCenter)
+        self._refresh_meta_hint.setStyleSheet("color:#7FA7D9;font-size:12px;")
+        desc_layout.addWidget(self._refresh_meta_hint)
+        root.addWidget(desc_box, 1)
 
         hist_box = QGroupBox("游玩记录")
         hist_layout = QVBoxLayout(hist_box)
-        self._history_table = QTableWidget(0, 4)
-        self._history_table.setHorizontalHeaderLabels(["开始时间", "结束时间", "时长", "秒数"])
+        self._history_table = QTableWidget(0, 3)
+        self._history_table.setHorizontalHeaderLabels(["开始时间", "结束时间", "时长"])
         self._history_table.horizontalHeader().setStretchLastSection(True)
         self._history_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self._history_table.setSelectionBehavior(QTableWidget.SelectRows)
         hist_layout.addWidget(self._history_table)
         root.addWidget(hist_box, 1)
 
-        launch_row = QHBoxLayout()
-        self._btn_run = QPushButton("启动游戏")
+        btn_group1 = QHBoxLayout()
+        btn_group1.setSpacing(8)
+        
+        self._btn_run = QPushButton("▶️ 启动游戏")
+        self._btn_run.setProperty("btnRole", "primary")
         self._btn_run.setToolTip("普通方式启动（退出后写入游玩记录）")
         self._btn_run.clicked.connect(self._on_run_game)
-        launch_row.addWidget(self._btn_run)
-        self._btn_run_le = QPushButton("LE 转区启动")
+        btn_group1.addWidget(self._btn_run)
+
+        self._btn_run_le = QPushButton("🌐 LE 转区启动")
+        self._btn_run_le.setProperty("btnRole", "primary")
         self._btn_run_le.setToolTip(
             "使用 Locale Emulator (LEProc)；在「更多 → Locale Emulator (LE)…」中配置路径"
         )
         self._btn_run_le.clicked.connect(self._on_run_game_le)
-        launch_row.addWidget(self._btn_run_le)
-        launch_row.addStretch(1)
-        root.addLayout(launch_row)
+        btn_group1.addWidget(self._btn_run_le)
+        
+        btn_group1.addStretch(1)
+        root.addLayout(btn_group1)
 
-        btn_row = QHBoxLayout()
-        self._btn_root = QPushButton("打开游戏目录")
-        self._btn_root.clicked.connect(self._on_open_root)
-        btn_row.addWidget(self._btn_root)
+        btn_group2 = QHBoxLayout()
+        btn_group2.setSpacing(8)
 
-        self._btn_launch = QPushButton("打开启动文件所在位置")
-        self._btn_launch.clicked.connect(self._on_open_launch_dir)
-        btn_row.addWidget(self._btn_launch)
-
-        self._btn_meta = QPushButton("重新获取元数据 (VNDB)")
-        self._btn_meta.clicked.connect(self._on_refresh_meta)
-        btn_row.addWidget(self._btn_meta)
-
-        self._btn_cover = QPushButton("重新获取封面")
-        self._btn_cover.clicked.connect(self._on_refresh_cover)
-        btn_row.addWidget(self._btn_cover)
-
-        self._btn_edit = QPushButton("编辑名称 / 启动")
-        self._btn_edit.clicked.connect(self._on_edit_identity)
-        btn_row.addWidget(self._btn_edit)
-
-        self._btn_custom_cover = QPushButton("设置自定义封面")
-        self._btn_custom_cover.clicked.connect(self._on_set_custom_cover)
-        btn_row.addWidget(self._btn_custom_cover)
-
-        self._btn_save_mgr = QPushButton("存档管理…")
+        self._btn_save_mgr = QPushButton("💾 存档管理")
         self._btn_save_mgr.setToolTip(
             "指定存档目录、备份与还原 ZIP；可配置全局 2DFan 线索库并在「自动发现」中合并社区路径"
         )
         self._btn_save_mgr.clicked.connect(self._on_open_save_manager)
-        btn_row.addWidget(self._btn_save_mgr)
+        btn_group2.addWidget(self._btn_save_mgr)
 
-        self._btn_reload = QPushButton("刷新")
+        self._btn_edit = QPushButton("✏️ 编辑名称/路径")
+        self._btn_edit.clicked.connect(self._on_edit_identity)
+        btn_group2.addWidget(self._btn_edit)
+
+        self._btn_select_title = QPushButton("📝 选择标题")
+        self._btn_select_title.setToolTip("从候选标题中选择游戏名称")
+        self._btn_select_title.clicked.connect(self._on_select_title)
+        btn_group2.addWidget(self._btn_select_title)
+
+        btn_group2.addStretch(1)
+        root.addLayout(btn_group2)
+
+        btn_group3 = QHBoxLayout()
+        btn_group3.setSpacing(8)
+
+        self._btn_root = QPushButton("📂 打开游戏目录")
+        self._btn_root.setProperty("btnRole", "secondary")
+        self._btn_root.clicked.connect(self._on_open_root)
+        btn_group3.addWidget(self._btn_root)
+
+        self._btn_launch = QPushButton("🔍 打开启动文件")
+        self._btn_launch.setProperty("btnRole", "secondary")
+        self._btn_launch.clicked.connect(self._on_open_launch_dir)
+        btn_group3.addWidget(self._btn_launch)
+
+        btn_group3.addStretch(1)
+        root.addLayout(btn_group3)
+
+        btn_group4 = QHBoxLayout()
+        btn_group4.setSpacing(8)
+
+        self._btn_meta = QPushButton("🔄 刷新元数据")
+        self._btn_meta.setToolTip("从 VNDB 获取游戏元数据和封面")
+        self._btn_meta.clicked.connect(self._on_refresh_meta)
+        btn_group4.addWidget(self._btn_meta)
+
+        self._btn_custom_cover = QPushButton("🖼️ 设置自定义封面")
+        self._btn_custom_cover.clicked.connect(self._on_set_custom_cover)
+        btn_group4.addWidget(self._btn_custom_cover)
+
+        self._btn_reload = QPushButton("🔃 刷新")
         self._btn_reload.clicked.connect(self.reload_from_db)
-        btn_row.addWidget(self._btn_reload)
+        btn_group4.addWidget(self._btn_reload)
 
-        root.addLayout(btn_row)
+        btn_group4.addStretch(1)
+        root.addLayout(btn_group4)
 
-        debug_box = QGroupBox("调试信息（数据库原始字段与元数据）")
-        debug_layout = QVBoxLayout(debug_box)
+        self._debug_box = QGroupBox("调试信息")
+        self._debug_box.setCheckable(True)
+        self._debug_box.setChecked(False)
+        debug_layout = QVBoxLayout(self._debug_box)
         self._debug = QPlainTextEdit()
         self._debug.setReadOnly(True)
         self._debug.setMaximumBlockCount(2000)
@@ -212,13 +297,15 @@ class GameDetailDialog(QDialog):
         dbg_btn.addWidget(copy_dbg)
         dbg_btn.addStretch(1)
         debug_layout.addLayout(dbg_btn)
-        root.addWidget(debug_box)
+        root.addWidget(self._debug_box)
 
-        buttons = QDialogButtonBox(QDialogButtonBox.Close)
-        buttons.rejected.connect(self.reject)
-        root.addWidget(buttons)
+        self._status_label = QLabel()
+        self._status_label.setStyleSheet("color:#7FA7D9;font-size:11px;padding:4px;")
+        self._status_label.setAlignment(Qt.AlignCenter)
+        root.addWidget(self._status_label)
 
         self._game: GameRecord | None = None
+        self._is_loading = False
         self.reload_from_db()
 
     def _db(self) -> Database:
@@ -226,6 +313,13 @@ class GameDetailDialog(QDialog):
 
     def _user_id(self) -> int:
         return self._main.current_user_id
+
+    def _set_status(self, text: str) -> None:
+        self._status_label.setText(text)
+        QApplication.processEvents()
+
+    def _clear_status(self) -> None:
+        self._status_label.setText("")
 
     def reload_from_db(self) -> None:
         game = self._db().get_game_by_id(self._user_id(), self._game_id)
@@ -270,30 +364,45 @@ class GameDetailDialog(QDialog):
     def _apply_game(self, game: GameRecord) -> None:
         self.setWindowTitle(f"游戏详情 — {game.name}")
         self._title.setText(game.name)
-        sub = []
-        if game.title_original:
-            sub.append(f"原名: {game.title_original}")
-        if game.title_localized:
-            sub.append(f"译名: {game.title_localized}")
-        self._subtitle.setText(" ｜ ".join(sub) if sub else "（无 VNDB 标题信息）")
 
-        rating_txt = (
-            f"评分: {float(game.rating):.2f}" if game.rating is not None else "评分: —"
-        )
-        self._rating_line.setText(rating_txt)
+        self._title_original.setText(f'<span class="meta-label">原名:</span> <span class="meta-value">{game.title_original or "<span class=\'missing\'>未获取</span>"}</span>')
+        self._title_localized.setText(f'<span class="meta-label">译名:</span> <span class="meta-value">{game.title_localized or "<span class=\'missing\'>未获取</span>"}</span>')
+        
+        if game.rating is not None:
+            self._rating_line.setText(f'<span class="meta-label">评分:</span> <span class="meta-value">{float(game.rating):.2f}</span>')
+        else:
+            self._rating_line.setText('<span class="meta-label">评分:</span> <span class="missing">未获取</span>')
+        
+        self._platforms_line.setText(f'<span class="meta-label">平台:</span> <span class="meta-value">{game.platforms or "<span class=\'missing\'>未获取</span>"}</span>')
+        self._languages_line.setText(f'<span class="meta-label">语言:</span> <span class="meta-value">{game.languages or "<span class=\'missing\'>未获取</span>"}</span>')
 
-        self._platforms_line.setText(f"平台: {game.platforms or '—'}")
-        self._languages_line.setText(f"语言: {game.languages or '—'}")
+        source_text = ""
+        if game.source == "vndb":
+            source_text = f'<span title="来自 VNDB 数据库">📦 数据来源: VNDB</span>'
+        elif game.source:
+            source_text = f"📦 数据来源: {game.source}"
+        else:
+            source_text = '<span class="missing">📦 数据来源: 未获取</span>'
+        
+        vndb_text = f"VNDB ID: {game.vndb_id or '未获取'}"
+        cat_text = f"分类: {game.categories or '未设置'}"
+        self._meta_source.setText(f"{vndb_text} ｜ {source_text} ｜ {cat_text}")
 
-        self._meta_line.setText(
-            f"VNDB ID: {game.vndb_id or '—'} ｜ 数据来源: {game.source or '—'} ｜ 分类: {game.categories or '—'}"
-        )
-        last = game.last_played_at or "无"
+        last_played = _fmt_datetime(game.last_played_at) if game.last_played_at else "无"
+        duration_text = _fmt_duration(game.total_play_seconds)
         self._play_summary.setText(
-            f"最近游玩: {last} ｜ 次数: {game.play_count} ｜ 累计: {_fmt_total_seconds(game.total_play_seconds)}"
+            f"最近游玩: {last_played} ｜ 次数: {game.play_count} ｜ 累计: {duration_text}"
         )
+        self._play_summary.setToolTip(f"累计游玩 {game.total_play_seconds} 秒")
 
-        self._description.setPlainText(game.description or "")
+        desc = game.description or ""
+        if desc:
+            self._description.setPlainText(desc)
+            self._refresh_meta_hint.setText("")
+        else:
+            self._description.setPlainText("")
+            self._refresh_meta_hint.setText('<a href="refresh">点击「刷新元数据」获取游戏简介</a>')
+            self._refresh_meta_hint.linkActivated.connect(lambda: self._on_refresh_meta())
 
         pix = QPixmap()
         if game.cover_path:
@@ -301,7 +410,7 @@ class GameDetailDialog(QDialog):
             if p.exists():
                 pix = QPixmap(str(p))
         if pix.isNull():
-            self._cover.setText("无封面")
+            self._cover.setText("无封面\n拖拽图片到此处")
             self._cover.setPixmap(QPixmap())
         else:
             self._cover.setText("")
@@ -316,10 +425,13 @@ class GameDetailDialog(QDialog):
         self._history_table.setRowCount(0)
         self._history_table.setRowCount(len(records))
         for row, rec in enumerate(records):
-            self._history_table.setItem(row, 0, QTableWidgetItem(rec.started_at))
-            self._history_table.setItem(row, 1, QTableWidgetItem(rec.ended_at or "—"))
-            self._history_table.setItem(row, 2, QTableWidgetItem(_fmt_duration(rec.duration_seconds)))
-            self._history_table.setItem(row, 3, QTableWidgetItem(str(rec.duration_seconds)))
+            self._history_table.setItem(row, 0, QTableWidgetItem(_fmt_datetime(rec.started_at)))
+            end_time = _fmt_datetime(rec.ended_at) if rec.ended_at else "—"
+            self._history_table.setItem(row, 1, QTableWidgetItem(end_time))
+            duration = _fmt_duration(rec.duration_seconds)
+            item = QTableWidgetItem(duration)
+            item.setToolTip(f"{rec.duration_seconds} 秒")
+            self._history_table.setItem(row, 2, item)
         self._history_table.resizeColumnsToContents()
 
     def _copy_debug(self) -> None:
@@ -357,9 +469,23 @@ class GameDetailDialog(QDialog):
             QMessageBox.warning(self, "无法打开", str(exc))
 
     def _on_refresh_meta(self) -> None:
+        if self._is_loading:
+            return
+        self._is_loading = True
+        self._btn_meta.setEnabled(False)
+        self._set_status("正在从 VNDB 获取元数据...")
+        
+        def on_finished():
+            self._is_loading = False
+            self._btn_meta.setEnabled(True)
+            self.reload_from_db()
+            self._set_status("元数据刷新完成")
+            QTimer.singleShot(3000, self._clear_status)
+        
+        from PySide6.QtCore import QTimer
         self._main.run_vndb_import_for_game_id(
             self._game_id,
-            on_finished=self.reload_from_db,
+            on_finished=on_finished,
         )
 
     def _on_refresh_cover(self) -> None:
@@ -384,5 +510,88 @@ class GameDetailDialog(QDialog):
         if dialog.exec():
             self.reload_from_db()
 
+    def _on_select_title(self) -> None:
+        if not self._game:
+            return
+
+        candidates: list[tuple[str, str]] = []
+        seen = set()
+
+        raw = self._db().get_game_storage_debug(self._game_id)
+        if raw:
+            custom_name = str(raw.get("custom_name", "")).strip()
+            if custom_name and custom_name not in seen:
+                candidates.append((custom_name, "用户自定义"))
+                seen.add(custom_name)
+
+        if self._game.window_title and self._game.window_title not in seen:
+            candidates.append((self._game.window_title, "窗口标题"))
+            seen.add(self._game.window_title)
+
+        if self._game.name and self._game.name not in seen:
+            candidates.append((self._game.name, "目录名"))
+            seen.add(self._game.name)
+
+        if self._game.title_original and self._game.title_original not in seen:
+            candidates.append((self._game.title_original, "VNDB 原名"))
+            seen.add(self._game.title_original)
+
+        if self._game.title_localized and self._game.title_localized not in seen:
+            candidates.append((self._game.title_localized, "VNDB 译名"))
+            seen.add(self._game.title_localized)
+
+        if not candidates:
+            QMessageBox.information(self, "无候选标题", "当前没有可选择的候选标题。")
+            return
+
+        from app.ui.dialogs.title_selector_dialog import TitleSelectorDialog
+
+        selected = TitleSelectorDialog.get_title(
+            current_name=self._game.name,
+            candidates=candidates,
+            parent=self,
+        )
+
+        if selected:
+            self._db().update_game_identity(self._game_id, selected, self._game.launch_exe)
+            QMessageBox.information(self, "标题已更新", f"已将游戏名称设置为：{selected}")
+            self.reload_from_db()
+            self._main.refresh_games()
+
     def _on_open_save_manager(self) -> None:
         self._main.open_save_manager(self._game_id)
+
+    def _on_cover_drag_enter(self, event: QDragEnterEvent) -> None:
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+            self._cover.setStyleSheet("background:#3B82F6;border:2px dashed #60A5FA;border-radius:8px;")
+
+    def _on_cover_drop(self, event: QDropEvent) -> None:
+        self._cover.setStyleSheet("background:#252C36;border-radius:8px;")
+        if not event.mimeData().hasUrls():
+            return
+        
+        urls = event.mimeData().urls()
+        if not urls:
+            return
+        
+        file_path = Path(urls[0].toLocalFile())
+        if not file_path.exists() or not file_path.is_file():
+            QMessageBox.warning(self, "无效文件", "请拖拽有效的图片文件")
+            return
+        
+        ext = file_path.suffix.lower()
+        if ext not in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
+            QMessageBox.warning(self, "格式不支持", "仅支持 JPG、PNG、WebP、GIF 格式")
+            return
+        
+        from app.ui.dialogs.custom_cover_manager_dialog import CustomCoverManagerDialog
+        dialog = CustomCoverManagerDialog(
+            self._main,
+            self._game_id,
+            self._game.name,
+            self._game.root_dir,
+            str(file_path)
+        )
+        if dialog.exec():
+            self.reload_from_db()

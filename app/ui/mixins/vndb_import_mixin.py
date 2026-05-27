@@ -44,12 +44,22 @@ class VndbImportMixin:
         show_result_dialog: bool = True,
         on_import_finished: Callable[[], None] | None = None,
     ) -> None:
+        # 收集已缓存的窗口标题
+        window_titles: dict[str, str] = {}
+        for name, root_dir, launch_exe in targets:
+            game = self.db.find_game_by_root(root_dir)
+            if game is not None:
+                wt = self.db.get_game_window_title(game.id)
+                if wt:
+                    window_titles[root_dir] = wt
+
         self._vndb_worker = VndbImportWorker(
             targets=targets,
             vndb_service=self.vndb_service,
             cover_manager=self.cover_manager,
             max_threads=6,
             parent=self,
+            window_titles=window_titles,
         )
         self._vndb_worker.progress.connect(self._on_vndb_progress)
         self._vndb_worker.finished.connect(
@@ -112,9 +122,40 @@ class VndbImportMixin:
                 success=success,
                 cancelled=cancelled,
                 outcomes=outcomes,
+                targets=targets,
                 parent=self,
             )
             dialog.exec()
+            
+            # 处理用户选择的正确条目
+            selected_records = dialog.get_selected_records()
+            for idx, record in selected_records:
+                name, root_dir, launch_exe = targets[idx]
+                cover = self.cover_manager.cache_cover_with_fallback(
+                    image_url=record.image_url,
+                    cache_key=record.vndb_id,
+                    game_name=name,
+                )
+                row = VndbImportRow(
+                    name=name,
+                    root_dir=root_dir,
+                    launch_exe=launch_exe,
+                    vndb_id=record.vndb_id,
+                    title_original=record.title_original,
+                    title_localized=record.title_localized,
+                    description=record.description,
+                    rating=record.rating,
+                    platforms=record.platforms_to_str(),
+                    languages=record.languages_to_str(),
+                    image_url=record.image_url,
+                    screenshots_json=record.screenshots_to_json(),
+                    cover_path=cover,
+                )
+                self.db.upsert_games_batch([row])
+                self.status.setText(f"已更新游戏「{name}」的元数据")
+            
+            if selected_records:
+                self.refresh_games()
         elif total <= 1:
             if cancelled:
                 self.status.setText("VNDB 元数据获取已取消")

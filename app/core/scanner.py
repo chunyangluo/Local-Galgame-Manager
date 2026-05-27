@@ -78,7 +78,23 @@ NON_GAME_DIR_NAME_KEYWORDS = (
     "trainer",
 )
 
-BRIDGE_DIR_NAMES = {"pc", "game", "games", "bin", "x64", "x86", "win64", "win32", "release"}
+BRIDGE_DIR_NAMES = {
+    "pc", "game", "games", "bin", "x64", "x86", "win64", "win32", "release",
+    "data", "files", "lib", "logs", "assets",
+}
+
+# 垃圾后缀列表：语言标识、附加标签，解析目录名时自动剔除
+_DIR_SUFFIX_BLACKLIST = (
+    "_chs", "_cn", "_jp", "_en", "_kr",
+    "_汉化", "_全cg", "_存档", "_绿色版", "_免安装",
+    "_简体", "_繁体", "_中文", "_日文", "_英文",
+)
+
+# 全角→半角映射表
+_FULLWIDTH_MAP = str.maketrans(
+    "　０１２３４５６７８９ＡＢＣＤＥＦＧＨＩＪＫＬＭＮＯＰＱＲＳＴＵＶＷＸＹＺａｂｃｄｅｆｇｈｉｊｋｌｍｎｏｐｑｒｓｔｕｖｗｘｙｚ！？～－",
+    " 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz!?~-",
+)
 
 @dataclass
 class ScanResult:
@@ -355,12 +371,24 @@ class GameScanner:
         return unique
 
     def _resolve_game_name(self, directory: Path) -> str:
-        if not self._is_bridge_dir_name(directory.name) and not self._is_code_like_dir_name(directory.name):
-            return directory.name
+        raw_name = directory.name
+        # 全角→半角统一
+        normalized = raw_name.translate(_FULLWIDTH_MAP)
+        # 后缀过滤
+        normalized = self._strip_dir_suffix(normalized)
+
+        if not self._is_bridge_dir_name(raw_name) and not self._is_code_like_dir_name(raw_name):
+            return normalized
         # Bridge folders like "PC" are often wrappers; try extracting a better
         # display name from the single-child chain.
         best_name = self._find_best_ancestor_name(directory)
+        # 对 best_name 也做后缀过滤和全角统一
+        best_name = best_name.translate(_FULLWIDTH_MAP)
+        best_name = self._strip_dir_suffix(best_name)
+
+        # 优化递归：若连续多层都是桥接目录，直接向上回溯取顶层有效文件夹名
         current = directory
+        consecutive_bridge = 0
         for _ in range(4):
             try:
                 children = [p for p in current.iterdir() if p.is_dir() and not self._should_skip_directory(p)]
@@ -369,14 +397,29 @@ class GameScanner:
             if len(children) != 1:
                 break
             child = children[0]
-            if (
-                not self._is_non_game_dir_name(child.name)
-                and not self._is_bridge_dir_name(child.name)
-                and not self._is_code_like_dir_name(child.name)
-            ):
-                best_name = child.name
+            if self._is_bridge_dir_name(child.name) or self._is_code_like_dir_name(child.name):
+                consecutive_bridge += 1
+                if consecutive_bridge >= 2:
+                    # 连续多层桥接目录，直接使用 best_name（向上回溯的结果）
+                    break
+            else:
+                consecutive_bridge = 0
+                child_name = child.name.translate(_FULLWIDTH_MAP)
+                child_name = self._strip_dir_suffix(child_name)
+                if not self._is_non_game_dir_name(child.name):
+                    best_name = child_name
             current = child
         return best_name
+
+    @staticmethod
+    def _strip_dir_suffix(name: str) -> str:
+        """剔除目录名末尾的垃圾后缀（语言标识、附加标签等）。"""
+        lower = name.lower()
+        for suffix in _DIR_SUFFIX_BLACKLIST:
+            if lower.endswith(suffix):
+                name = name[: len(name) - len(suffix)]
+                break
+        return name.strip()
 
     def _is_code_like_dir_name(self, directory_name: str) -> bool:
         """

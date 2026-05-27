@@ -5,6 +5,7 @@ from app.ui.dialogs.plugin_settings_dialog import PluginSettingsDialog
 from app.ui.dialogs.scan_roots_dialog import ScanRootsDialog
 from app.ui.dialogs.settings_dialog import SettingsDialog
 from app.ui.dialogs.theme_settings_dialog import ThemeSettingsDialog
+from app.ui.dialogs.title_selector_dialog import TitleSelectorDialog
 from app.ui.dialogs.vndb_import_result_dialog import VndbImportResultDialog
 
 __all__ = [
@@ -15,5 +16,6 @@ __all__ = [
     "ScanRootsDialog",
     "SettingsDialog",
     "ThemeSettingsDialog",
+    "TitleSelectorDialog",
     "VndbImportResultDialog",
 ]

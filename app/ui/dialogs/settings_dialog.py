@@ -102,6 +102,7 @@ class SettingsDialog(QDialog):
         self._le_path_edit.editingFinished.connect(self._on_le_path_editing_finished)
         le_layout.addWidget(self._le_path_edit)
         btn_browse_le = QPushButton("浏览...")
+        btn_browse_le.setProperty("btnRole", "secondary")
         btn_browse_le.clicked.connect(self._browse_le_path)
         le_layout.addWidget(btn_browse_le)
         system_layout.addRow("Locale Emulator:", le_layout)
@@ -117,6 +118,7 @@ class SettingsDialog(QDialog):
         self._hints_path_edit.editingFinished.connect(self._on_hints_path_editing_finished)
         hints_layout.addWidget(self._hints_path_edit)
         btn_browse_hints = QPushButton("浏览...")
+        btn_browse_hints.setProperty("btnRole", "secondary")
         btn_browse_hints.clicked.connect(self._browse_hints_path)
         hints_layout.addWidget(btn_browse_hints)
         system_layout.addRow("2DFan线索库:", hints_layout)
@@ -147,9 +149,11 @@ class SettingsDialog(QDialog):
         button_box = QDialogButtonBox()
         
         btn_reset = QPushButton("恢复默认设置")
+        btn_reset.setProperty("btnRole", "danger")
         btn_reset.clicked.connect(self._reset_to_defaults)
         
         btn_ok = QPushButton("确定")
+        btn_ok.setProperty("btnRole", "primary")
         btn_ok.clicked.connect(self.accept)
         
         btn_cancel = QPushButton("取消")

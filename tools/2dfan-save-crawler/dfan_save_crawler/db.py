@@ -32,6 +32,11 @@ CREATE TABLE IF NOT EXISTS save_hints (
     UNIQUE(download_id, hint_text, hint_kind)
 );
 
+CREATE TABLE IF NOT EXISTS crawl_state (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_save_hints_download ON save_hints(download_id);
 CREATE INDEX IF NOT EXISTS idx_save_hints_kind ON save_hints(hint_kind);
 CREATE INDEX IF NOT EXISTS idx_crawl_pages_title ON crawl_pages(title);
@@ -125,3 +130,33 @@ def iter_export_rows(conn: sqlite3.Connection) -> list[dict[str, Any]]:
         """
     )
     return [dict(r) for r in cur.fetchall()]
+
+
+def get_state(conn: sqlite3.Connection, key: str, default: str | None = None) -> str | None:
+    cur = conn.execute("SELECT value FROM crawl_state WHERE key = ?", (key,))
+    row = cur.fetchone()
+    return row["value"] if row else default
+
+
+def set_state(conn: sqlite3.Connection, key: str, value: str) -> None:
+    conn.execute(
+        """
+        INSERT INTO crawl_state (key, value) VALUES (?, ?)
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """,
+        (key, value),
+    )
+
+
+def get_last_page(conn: sqlite3.Connection) -> int:
+    val = get_state(conn, "last_page", "0")
+    return int(val) if val else 0
+
+
+def set_last_page(conn: sqlite3.Connection, page: int) -> None:
+    set_state(conn, "last_page", str(page))
+
+
+def page_exists(conn: sqlite3.Connection, download_id: int) -> bool:
+    cur = conn.execute("SELECT 1 FROM crawl_pages WHERE download_id = ?", (download_id,))
+    return cur.fetchone() is not None

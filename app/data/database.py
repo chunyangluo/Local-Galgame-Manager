@@ -31,6 +31,7 @@ class GameRecord:
     screenshots_json: str | None = None
     source: str | None = None
     custom_save_root: str | None = None
+    window_title: str | None = None
 
 
 @dataclass
@@ -226,6 +227,8 @@ class Database:
         )
         if "custom_save_root" not in cols:
             self.conn.execute("ALTER TABLE games ADD COLUMN custom_save_root TEXT")
+        if "window_title" not in cols:
+            self.conn.execute("ALTER TABLE games ADD COLUMN window_title TEXT")
 
     def _ensure_save_backup_schema(self) -> None:
         self.conn.executescript(
@@ -614,7 +617,7 @@ class Database:
             """
             SELECT
                 g.id,
-                COALESCE(NULLIF(g.custom_name, ''), g.name) AS name,
+                COALESCE(NULLIF(g.custom_name, ''), NULLIF(g.window_title, ''), g.name) AS name,
                 g.root_dir,
                 COALESCE(NULLIF(g.custom_launch_exe, ''), g.launch_exe) AS launch_exe,
                 COALESCE(NULLIF(g.custom_cover_path, ''), g.cover_path) AS cover_path,
@@ -628,7 +631,8 @@ class Database:
                 g.image_url,
                 g.screenshots_json,
                 g.source,
-                NULLIF(TRIM(g.custom_save_root), '') AS custom_save_root
+                NULLIF(TRIM(g.custom_save_root), '') AS custom_save_root,
+                g.window_title
             FROM games g
             WHERE g.root_dir = ?
             """,
@@ -658,6 +662,7 @@ class Database:
             screenshots_json=row["screenshots_json"],
             source=row["source"],
             custom_save_root=row["custom_save_root"],
+            window_title=row["window_title"],
         )
 
     def update_game_identity(self, game_id: int, name: str, launch_exe: str) -> None:
@@ -706,7 +711,7 @@ class Database:
             """
             SELECT
                 g.id,
-                COALESCE(NULLIF(g.custom_name, ''), g.name) AS name,
+                COALESCE(NULLIF(g.custom_name, ''), NULLIF(g.window_title, ''), g.name) AS name,
                 g.root_dir,
                 COALESCE(NULLIF(g.custom_launch_exe, ''), g.launch_exe) AS launch_exe,
                 COALESCE(NULLIF(g.custom_cover_path, ''), g.cover_path) AS cover_path,
@@ -721,6 +726,7 @@ class Database:
                 g.screenshots_json,
                 g.source,
                 NULLIF(TRIM(g.custom_save_root), '') AS custom_save_root,
+                g.window_title,
                 CASE WHEN f.game_id IS NULL THEN 0 ELSE 1 END AS favorite,
                 COALESCE(GROUP_CONCAT(c.name, ','), '') AS categories,
                 MAX(p.started_at) AS last_played_at,
@@ -759,6 +765,7 @@ class Database:
                 screenshots_json=r["screenshots_json"],
                 source=r["source"],
                 custom_save_root=r["custom_save_root"],
+                window_title=r["window_title"],
             )
             for r in rows
         ]
@@ -843,7 +850,7 @@ class Database:
                 pr.started_at,
                 pr.ended_at,
                 pr.duration_seconds,
-                COALESCE(NULLIF(g.custom_name, ''), g.name) AS game_name,
+                COALESCE(NULLIF(g.custom_name, ''), NULLIF(g.window_title, ''), g.name) AS game_name,
                 COALESCE(NULLIF(g.custom_cover_path, ''), g.cover_path) AS cover_path,
                 g.image_url
             FROM play_records pr
@@ -1017,6 +1024,30 @@ class Database:
             (normalized, now, game_id),
         )
         self.conn.commit()
+
+    def update_game_window_title(self, game_id: int, window_title: str | None) -> None:
+        """缓存游戏窗口标题，只写入一次（已有值不覆盖）。"""
+        if not window_title or not window_title.strip():
+            return
+        existing = self.conn.execute(
+            "SELECT window_title FROM games WHERE id = ?", (game_id,)
+        ).fetchone()
+        if existing and existing["window_title"]:
+            return  # 已缓存，不覆盖
+        now = datetime.utcnow().isoformat()
+        self.conn.execute(
+            "UPDATE games SET window_title = ?, updated_at = ? WHERE id = ?",
+            (window_title.strip(), now, game_id),
+        )
+        self.conn.commit()
+
+    def get_game_window_title(self, game_id: int) -> str | None:
+        row = self.conn.execute(
+            "SELECT window_title FROM games WHERE id = ?", (game_id,)
+        ).fetchone()
+        if row is None or row["window_title"] is None:
+            return None
+        return str(row["window_title"]).strip() or None
 
     def list_save_backups(self, user_id: int, game_id: int) -> list[SaveBackupRecord]:
         rows = self.conn.execute(

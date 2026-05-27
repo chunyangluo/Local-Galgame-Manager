@@ -242,8 +242,26 @@ class GameActionMixin:
         dlg = TwodfanLibraryDialog(self)
         dlg.exec()
 
+    def _start_twodfan_crawl(self) -> None:
+        from app.ui.dialogs.twodfan_crawl_dialog import TwodfanCrawlDialog
+        from app.paths import default_twodfan_sqlite_path
+
+        # Auto-configure the hints DB path if not set
+        current_path = self.db.get_twodfan_hints_db_path()
+        default_path = str(default_twodfan_sqlite_path())
+        if not current_path or not current_path.strip():
+            self.db.set_twodfan_hints_db_path(default_path)
+
+        dlg = TwodfanCrawlDialog(
+            max_pages=0,  # 0 means all pages
+            save_only=True,
+            parent=self,
+        )
+        dlg.start()
+        dlg.exec()
+
     def _exec_game_context_menu_for_id(self, game_id: int, menu_anchor: QPoint | None = None) -> None:
-        from PySide6.QtGui import QCursor
+        from PySide6.QtGui import QCursor, QIcon
 
         game = self.db.get_game_by_id(self.current_user_id, game_id)
         if game is None:
@@ -256,13 +274,14 @@ class GameActionMixin:
         menu = QMenu(self)
         menu.setToolTipsVisible(True)
 
-        # 启动
-        launch_action = menu.addAction("启动游戏")
+        # ===== 第一组：启动操作（高频）=====
+        launch_action = menu.addAction("▶️ 启动游戏")
         launch_action.triggered.connect(
             lambda checked=False, gid=game.id: self.launch_game_by_id(gid, message_parent=self)
         )
+        launch_action.setToolTip("正常启动游戏")
 
-        le_action = menu.addAction("LE 转区启动")
+        le_action = menu.addAction("🌐 LE 转区启动")
         le_action.triggered.connect(
             lambda checked=False, gid=game.id: self.launch_game_by_id(
                 gid, locale_emulator=True, message_parent=self
@@ -275,7 +294,7 @@ class GameActionMixin:
         else:
             le_action.setToolTip("通过 Locale Emulator 转区运行")
 
-        admin_action = menu.addAction("管理员启动")
+        admin_action = menu.addAction("🛡️ 管理员启动")
         admin_action.triggered.connect(
             lambda checked=False, gid=game.id: self.launch_game_by_id(
                 gid, as_admin=True, message_parent=self
@@ -285,46 +304,58 @@ class GameActionMixin:
 
         menu.addSeparator()
 
-        # 查看
-        detail_action = menu.addAction("游戏详情…")
+        # ===== 第二组：信息管理（高频）=====
+        detail_action = menu.addAction("ℹ️ 游戏详情")
         detail_action.triggered.connect(lambda checked=False, gid=game.id: self.open_game_detail(gid))
+        detail_action.setToolTip("查看游戏详细信息")
 
-        save_mgr_action = menu.addAction("存档管理…")
+        save_mgr_action = menu.addAction("💾 存档管理")
         save_mgr_action.triggered.connect(lambda checked=False, gid=game.id: self.open_save_manager(gid))
+        save_mgr_action.setToolTip("管理游戏存档备份与还原")
+
+        fav_text = "⭐ 取消收藏" if game.favorite else "☆ 收藏"
+        fav_action = menu.addAction(fav_text)
+        fav_action.triggered.connect(lambda checked=False, g=game: self._toggle_favorite_for_record(g))
+        fav_action.setToolTip("将游戏加入/移出收藏")
 
         menu.addSeparator()
 
-        # 编辑
-        fav_text = "取消收藏" if game.favorite else "收藏"
-        fav_action = menu.addAction(fav_text)
-        fav_action.triggered.connect(lambda checked=False, g=game: self._toggle_favorite_for_record(g))
-
-        edit_action = menu.addAction("编辑名称/路径")
-        edit_action.triggered.connect(
+        # ===== 第三组：编辑信息（二级菜单）=====
+        edit_submenu = menu.addMenu("✏️ 编辑信息")
+        
+        edit_name_action = edit_submenu.addAction("编辑名称/路径")
+        edit_name_action.triggered.connect(
             lambda checked=False, gid=game.id: self.edit_game_identity_for_game_id(gid)
         )
 
-        cover_submenu = menu.addMenu("封面")
-        cover_action = cover_submenu.addAction("设置封面")
+        edit_title_action = edit_submenu.addAction("选择标题")
+        edit_title_action.triggered.connect(
+            lambda checked=False, gid=game.id: self.open_game_detail(gid)
+        )
+        edit_title_action.setToolTip("从候选标题中选择游戏名称")
+
+        cover_action = edit_submenu.addAction("设置封面")
         cover_action.triggered.connect(
             lambda checked=False, gid=game.id: self.set_custom_cover_for_game_id(gid)
         )
-        retry_cover_action = cover_submenu.addAction("重新获取封面")
+
+        retry_cover_action = edit_submenu.addAction("重新获取封面")
         retry_cover_action.triggered.connect(
             lambda checked=False, g=game: self._retry_cover_for_record(g)
         )
 
-        menu.addSeparator()
-
-        # 管理
-        shortcut_action = menu.addAction("创建桌面快捷方式")
-        shortcut_action.triggered.connect(
-            lambda checked=False, g=game: self._create_shortcut_for_record(g)
-        )
-
-        assign_action = menu.addAction("分配分类")
+        assign_action = edit_submenu.addAction("分配分类")
         assign_action.triggered.connect(
             lambda checked=False, g=game: self._assign_categories_for_record(g)
         )
+
+        menu.addSeparator()
+
+        # ===== 第四组：其他操作（低频）=====
+        shortcut_action = menu.addAction("🔗 创建桌面快捷方式")
+        shortcut_action.triggered.connect(
+            lambda checked=False, g=game: self._create_shortcut_for_record(g)
+        )
+        shortcut_action.setToolTip("在桌面创建游戏快捷方式")
 
         menu.exec(menu_anchor if menu_anchor is not None else QCursor.pos())

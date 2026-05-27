@@ -342,40 +342,141 @@ class ThemeManager:
         """生成当前主题的完整样式表"""
         c = self._current_config
         
+        # 根据主题类型决定按钮文字色
+        is_light = c.theme_type == "light"
+        btn_text = c.text_primary if is_light else "#F2F4F7"
+        btn_text_hover = "#FFFFFF"
+        btn_text_disabled = c.text_disabled
+        # 功能类按钮色
+        primary_btn_bg = "#3B82F6" if is_light else "#3B82F6"
+        primary_btn_text = "#FFFFFF"
+        danger_btn_bg = "#DC2626" if is_light else "#DC2626"
+        danger_btn_text = "#FFFFFF"
+        secondary_btn_bg = c.tertiary_bg if is_light else "#374151"
+        secondary_btn_text = c.text_primary if is_light else "#E8ECF2"
+        
         return f"""
 QPushButton {{
-    color: {c.text_primary};
+    color: {btn_text};
     background-color: {c.button_bg};
     border: 1px solid {c.border_color};
     border-radius: 8px;
-    padding: 6px 12px;
+    padding: 8px 14px;
     font-family: {c.font_family};
     font-size: {c.font_size_normal}px;
+    font-weight: 600;
+    min-height: 30px;
 }}
 QPushButton:hover {{
     background-color: {c.button_hover};
     border-color: {c.accent_color};
+    color: {btn_text_hover};
 }}
 QPushButton:pressed {{
     background-color: {c.button_pressed};
     border-color: {c.accent_dark};
+    color: {btn_text_hover};
+}}
+QPushButton:disabled {{
+    color: {btn_text_disabled};
+    background-color: {c.tertiary_bg};
+    border: 1px solid {c.border_color};
+}}
+QPushButton:focus {{
+    border-color: {c.accent_color};
+    outline: none;
+}}
+QPushButton[active="true"] {{
+    color: {btn_text_hover};
+    background-color: {c.accent_dark};
+    border: 2px solid {c.accent_light};
+}}
+QPushButton[highlighted="true"] {{
+    color: {btn_text_hover};
+    border: 2px solid {c.warning_color};
+    background-color: {c.accent_dark};
+}}
+/* 操作类按钮：启动/保存/确认 */
+QPushButton[btnRole="primary"] {{
+    color: {primary_btn_text};
+    background-color: {primary_btn_bg};
+    border: 1px solid #2563EB;
+    font-weight: 700;
+}}
+QPushButton[btnRole="primary"]:hover {{
+    background-color: #2563EB;
+    border-color: #1D4ED8;
+}}
+QPushButton[btnRole="primary"]:pressed {{
+    background-color: #1D4ED8;
+}}
+QPushButton[btnRole="primary"]:disabled {{
+    color: #94A3B8;
+    background-color: #1E3A5F;
+    border-color: #2563EB;
+}}
+/* 危险类按钮：删除/重置 */
+QPushButton[btnRole="danger"] {{
+    color: {danger_btn_text};
+    background-color: {danger_btn_bg};
+    border: 1px solid #B91C1C;
+    font-weight: 700;
+}}
+QPushButton[btnRole="danger"]:hover {{
+    background-color: #B91C1C;
+    border-color: #991B1B;
+}}
+QPushButton[btnRole="danger"]:pressed {{
+    background-color: #991B1B;
+}}
+QPushButton[btnRole="danger"]:disabled {{
+    color: #94A3B8;
+    background-color: #5C1A1A;
+    border-color: #7F1D1D;
+}}
+/* 辅助类按钮：刷新/复制/打开目录 */
+QPushButton[btnRole="secondary"] {{
+    color: {secondary_btn_text};
+    background-color: {secondary_btn_bg};
+    border: 1px solid {c.border_color};
+}}
+QPushButton[btnRole="secondary"]:hover {{
+    background-color: {c.button_hover};
+    border-color: {c.accent_color};
+}}
+QPushButton[btnRole="secondary"]:pressed {{
+    background-color: {c.button_pressed};
+}}
+QPushButton[btnRole="secondary"]:disabled {{
+    color: {btn_text_disabled};
+    background-color: {c.tertiary_bg};
+    border-color: {c.border_color};
 }}
 QToolButton {{
-    color: {c.text_primary};
+    color: {btn_text};
     background-color: {c.button_bg};
     border: 1px solid {c.border_color};
     border-radius: 8px;
-    padding: 6px 12px;
+    padding: 8px 14px;
     font-family: {c.font_family};
     font-size: {c.font_size_normal}px;
+    font-weight: 600;
+    min-height: 30px;
 }}
 QToolButton:hover {{
     background-color: {c.button_hover};
     border-color: {c.accent_color};
+    color: {btn_text_hover};
 }}
 QToolButton:pressed {{
     background-color: {c.button_pressed};
     border-color: {c.accent_dark};
+    color: {btn_text_hover};
+}}
+QToolButton:disabled {{
+    color: {btn_text_disabled};
+    background-color: {c.tertiary_bg};
+    border: 1px solid {c.border_color};
 }}
 QLabel#toolbarSectionLabel {{
     color: {c.text_tertiary};
@@ -396,20 +497,6 @@ QWidget[toolbarTier="primary"] {{
 QWidget[toolbarTier="secondary"] {{
     background-color: {c.secondary_bg};
     border: 1px solid {c.border_color};
-}}
-QPushButton:disabled {{
-    color: {c.text_disabled};
-    background-color: {c.tertiary_bg};
-    border: 1px solid {c.border_color};
-}}
-QPushButton[highlighted="true"] {{
-    border: 2px solid {c.warning_color};
-    background-color: {c.accent_dark};
-}}
-QPushButton[active="true"] {{
-    color: {c.text_primary};
-    background-color: {c.button_bg};
-    border: 2px solid {c.accent_light};
 }}
 QListWidget {{
     border: 1px solid {c.border_color};
@@ -485,6 +572,7 @@ QLineEdit {{
     padding: 6px 10px;
     font-family: {c.font_family};
     font-size: {c.font_size_normal}px;
+    min-height: 30px;
 }}
 QLineEdit:focus {{
     border-color: {c.accent_color};
@@ -495,17 +583,20 @@ QComboBox {{
     background-color: {c.tertiary_bg};
     border: 1px solid {c.border_color};
     border-radius: 8px;
-    padding: 4px 8px;
+    padding: 6px 10px;
     font-family: {c.font_family};
     font-size: {c.font_size_normal}px;
+    min-height: 30px;
 }}
 QComboBox:hover {{
     border-color: {c.accent_color};
 }}
 QComboBox QAbstractItemView {{
+    color: {c.text_primary};
     background-color: {c.secondary_bg};
     border: 1px solid {c.border_color};
     selection-background-color: {c.accent_dark};
+    selection-color: #FFFFFF;
 }}
 QCheckBox {{
     color: {c.text_secondary};
@@ -513,10 +604,12 @@ QCheckBox {{
     font-size: {c.font_size_normal}px;
 }}
 QProgressBar {{
+    color: {c.text_primary};
     background-color: {c.tertiary_bg};
     border: 1px solid {c.border_color};
     border-radius: 8px;
     text-align: center;
+    font-weight: 600;
 }}
 QProgressBar::chunk {{
     background-color: {c.accent_color};
@@ -535,6 +628,106 @@ QDialog {{
 }}
 QMessageBox {{
     background-color: {c.secondary_bg};
+}}
+QMenu {{
+    color: {c.text_primary};
+    background-color: {c.secondary_bg};
+    border: 1px solid {c.border_color};
+    border-radius: 8px;
+    padding: 4px;
+}}
+QMenu::item {{
+    padding: 8px 20px;
+    border-radius: 4px;
+    color: {c.text_primary};
+}}
+QMenu::item:hover {{
+    background-color: {c.accent_dark};
+    color: #FFFFFF;
+}}
+QMenu::item:selected {{
+    background-color: {c.accent_dark};
+    color: #FFFFFF;
+}}
+QMenu::separator {{
+    height: 1px;
+    background: {c.border_color};
+    margin: 4px 8px;
+}}
+QGroupBox {{
+    color: {c.text_secondary};
+    border: 1px solid {c.border_color};
+    border-radius: 8px;
+    margin-top: 12px;
+    padding-top: 16px;
+    font-weight: 600;
+}}
+QGroupBox::title {{
+    subcontrol-origin: margin;
+    left: 12px;
+    padding: 0 6px;
+    color: {c.text_secondary};
+}}
+QTabWidget::pane {{
+    border: 1px solid {c.border_color};
+    border-radius: 6px;
+    background: {c.secondary_bg};
+}}
+QTabBar::tab {{
+    color: {c.text_tertiary};
+    background: {c.tertiary_bg};
+    border: 1px solid {c.border_color};
+    border-bottom: none;
+    padding: 6px 16px;
+    border-top-left-radius: 6px;
+    border-top-right-radius: 6px;
+}}
+QTabBar::tab:selected {{
+    color: {c.text_primary};
+    background: {c.button_bg};
+    border-color: {c.accent_color};
+}}
+QTabBar::tab:hover:!selected {{
+    color: {c.text_secondary};
+    background: {c.button_bg};
+}}
+QTableWidget {{
+    color: {c.text_secondary};
+    background: {c.secondary_bg};
+    border: 1px solid {c.border_color};
+    border-radius: 6px;
+    gridline-color: {c.border_color};
+}}
+QTableWidget::item {{
+    padding: 4px 8px;
+}}
+QTableWidget::item:selected {{
+    background: {c.accent_dark};
+    color: #FFFFFF;
+}}
+QHeaderView::section {{
+    color: {c.text_secondary};
+    background: {c.tertiary_bg};
+    border: 1px solid {c.border_color};
+    padding: 6px 8px;
+    font-weight: 600;
+}}
+QTextEdit {{
+    color: {c.text_secondary};
+    background: {c.secondary_bg};
+    border: 1px solid {c.border_color};
+    border-radius: 6px;
+}}
+QPlainTextEdit {{
+    color: {c.text_secondary};
+    background: {c.secondary_bg};
+    border: 1px solid {c.border_color};
+    border-radius: 6px;
+}}
+QDialogButtonBox QPushButton {{
+    min-width: 80px;
+    color: {btn_text};
+    font-weight: 600;
 }}
 """
     

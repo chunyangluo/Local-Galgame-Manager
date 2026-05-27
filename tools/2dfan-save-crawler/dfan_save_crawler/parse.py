@@ -29,21 +29,91 @@ def _norm_ws(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+def parse_total_pages(html: str) -> int | None:
+    """Parse total page count from download list page HTML."""
+    soup = BeautifulSoup(html, "html.parser")
+    
+    # Special handling for 2dfan "尾页" link - find the link containing "尾页" text
+    for a in soup.select('a[href*="/downloads/page/"]'):
+        if '尾页' in a.get_text():
+            href = a.get("href", "")
+            m = re.search(r'/downloads/page/(\d+)', href)
+            if m:
+                return int(m.group(1))
+    
+    # Try multiple patterns for pagination
+    patterns = [
+        # pattern: "共 123 页" or "共123页"
+        re.compile(r'共\s*(\d+)\s*页'),
+        # pattern: "123 pages" or "123Pages"
+        re.compile(r'(\d+)\s*[Pp]ages?'),
+        # data attributes
+        re.compile(r'data-total=["\'](\d+)["\']'),
+        re.compile(r'total\s*=\s*["\'](\d+)["\']', re.I),
+    ]
+    
+    for pat in patterns:
+        m = pat.search(html)
+        if m:
+            return int(m.group(1))
+    
+    # Try to find pagination UI element
+    pagination = soup.select('.pagination, .pager, .page-nav, [class*="pagination"]')
+    for p in pagination:
+        text = p.get_text()
+        for pat in patterns:
+            m = pat.search(text)
+            if m:
+                return int(m.group(1))
+    
+    return None
+
+
 def parse_download_list(html: str, base_url: str = "https://2dfan.com") -> list[ListItem]:
     soup = BeautifulSoup(html, "html.parser")
     out: list[ListItem] = []
-    for a in soup.select('a[href^="/downloads/"]'):
-        href = a.get("href") or ""
-        m = re.match(r"^/downloads/(\d+)$", href)
-        if not m:
-            continue
-        did = int(m.group(1))
-        title = _norm_ws(a.get_text(" ", strip=True))
-        if not title:
-            continue
-        if any(x.download_id == did for x in out):
-            continue
-        out.append(ListItem(did, urljoin(base_url, href), title))
+    
+    # Try multiple selector patterns
+    selectors = [
+        'a[href^="/downloads/"]',
+        'a[href*="/downloads/"]',
+        'article a',
+        '.download-item a',
+        '.list-item a',
+    ]
+    
+    found_links = set()
+    
+    for selector in selectors:
+        for a in soup.select(selector):
+            href = a.get("href") or ""
+            m = re.match(r"^/downloads/(\d+)$", href)
+            if not m:
+                # Also check for full URL
+                m = re.match(r"https?://2dfan\.com/downloads/(\d+)$", href)
+            
+            if not m:
+                continue
+            
+            did = int(m.group(1))
+            if did in found_links:
+                continue
+            
+            title = _norm_ws(a.get_text(" ", strip=True))
+            if not title:
+                # Try to get title from parent element
+                parent = a.find_parent(["article", "div", "li"])
+                if parent:
+                    title_elem = parent.find(["h3", "h2", ".title", ".name"])
+                    if title_elem:
+                        title = _norm_ws(title_elem.get_text(" ", strip=True))
+            
+            if not title:
+                title = f"Download {did}"
+            
+            found_links.add(did)
+            out.append(ListItem(did, urljoin(base_url, href), title))
+    
     return out
 
 
