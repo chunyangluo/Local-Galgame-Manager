@@ -244,6 +244,19 @@ gh release create v2.0.5 `
 
 改完代码后可在本地按顺序执行：**单元测试** → **（可选）自检** → **`./build.ps1`** → **提交推送**；打 zip、发 GitHub Release 与 `gh` 凭据等细节见 **`docs/RELEASE_CHECKLIST.md`**。
 
+### 本地运行命令
+
+在项目根目录打开 PowerShell 并执行：
+```powershell
+# 方式1：已在项目目录
+./build.ps1
+
+# 方式2：从任意位置运行
+powershell -ExecutionPolicy Bypass -File "e:\private\galgame\Local-Galgame-Manager\build.ps1"
+```
+
+`./build.ps1` 会自动完成：依赖检查 → 打包构建 → 更新桌面快捷方式 → 更新启动项（如已设置）。
+
 ---
 
 ## 仓库与文档索引
