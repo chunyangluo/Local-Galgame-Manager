@@ -3,11 +3,12 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from PySide6.QtCore import QSize, QThread, QThreadPool, QTimer, Qt, Signal
-from PySide6.QtGui import QAction, QCloseEvent, QIcon
+from PySide6.QtCore import QSize, QThread, QThreadPool, QTimer, Qt, Signal, QPropertyAnimation, QEasingCurve
+from PySide6.QtGui import QAction, QCloseEvent, QIcon, QCursor, QColor
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -119,6 +120,83 @@ class MainWindow(
 
     def _polish_toolbar_control(self, widget: QWidget) -> None:
         widget.setCursor(Qt.PointingHandCursor)
+
+    def _style_random_button(self) -> None:
+        """为随机按钮设置醒目的渐变样式和脉冲动画"""
+        btn = self.btn_random
+
+        # 渐变背景 + 突出样式
+        self._random_btn_style_normal = """
+            QPushButton {
+                color: #FFFFFF;
+                background: qlineargradient(
+                    x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #6C5CE7, stop:0.5 #A855F7, stop:1 #EC4899
+                );
+                border: 2px solid #A855F7;
+                border-radius: 10px;
+                padding: 7px 16px;
+                font-weight: bold;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(
+                    x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #7C6CF7, stop:0.5 #B865FF, stop:1 #FC5CA9
+                );
+                border: 2px solid #C084FC;
+            }
+            QPushButton:pressed {
+                background: qlineargradient(
+                    x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #5B4BD6, stop:0.5 #9340E0, stop:1 #D63D88
+                );
+                border: 2px solid #9333EA;
+            }
+        """
+        self._random_btn_style_glow = """
+            QPushButton {
+                color: #FFFFFF;
+                background: qlineargradient(
+                    x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #7C6CF7, stop:0.5 #B865FF, stop:1 #FC5CA9
+                );
+                border: 2px solid #D8B4FE;
+                border-radius: 10px;
+                padding: 7px 16px;
+                font-weight: bold;
+                font-size: 14px;
+            }
+            QPushButton:hover {
+                background: qlineargradient(
+                    x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #8C7CFF, stop:0.5 #C875FF, stop:1 #FF6CB9
+                );
+                border: 2px solid #E9D5FF;
+            }
+            QPushButton:pressed {
+                background: qlineargradient(
+                    x1:0, y1:0, x2:1, y2:1,
+                    stop:0 #5B4BD6, stop:0.5 #9340E0, stop:1 #D63D88
+                );
+                border: 2px solid #9333EA;
+            }
+        """
+        btn.setStyleSheet(self._random_btn_style_normal)
+
+        # 脉冲动画：定时切换 normal/glow 样式
+        self._random_glow_phase = False
+        self._random_glow_timer = QTimer(self)
+        self._random_glow_timer.timeout.connect(self._toggle_random_glow)
+        self._random_glow_timer.start(1200)
+
+    def _toggle_random_glow(self) -> None:
+        """切换随机按钮的脉冲发光状态"""
+        self._random_glow_phase = not self._random_glow_phase
+        if self._random_glow_phase:
+            self.btn_random.setStyleSheet(self._random_btn_style_glow)
+        else:
+            self.btn_random.setStyleSheet(self._random_btn_style_normal)
 
     def _build_more_menu(self) -> QMenu:
         menu = QMenu(self)
@@ -268,20 +346,12 @@ class MainWindow(
         toolbar.addWidget(self.btn_toggle_view)
         self._polish_toolbar_control(self.btn_toggle_view)
 
-        self._random_excluded_ids: set[int] = set()
-
         self.btn_random = QPushButton("🎲 随机")
         self.btn_random.clicked.connect(self._random_pick_game)
         self.btn_random.setToolTip("从列表中随机选择一个游戏")
         toolbar.addWidget(self.btn_random)
         self._polish_toolbar_control(self.btn_random)
-
-        self.btn_online_cover = QPushButton("")
-        self.btn_online_cover.clicked.connect(self._toggle_online_cover)
-        self.btn_online_cover.setToolTip("封面策略：仅本地 / 本地优先 / 网图优先")
-        self._apply_cover_fetch_mode_ui()
-        toolbar.addWidget(self.btn_online_cover)
-        self._polish_toolbar_control(self.btn_online_cover)
+        self._style_random_button()
 
         self.btn_refresh = QPushButton("刷新")
         self.btn_refresh.clicked.connect(self.refresh_games)
@@ -517,6 +587,9 @@ class MainWindow(
         from app.ui.theme_manager import ThemeManager
         theme_manager = ThemeManager()
         self.setStyleSheet(theme_manager.get_stylesheet())
+        # 重新应用随机按钮的特殊样式（全局样式表会覆盖）
+        if hasattr(self, 'btn_random'):
+            self._style_random_button()
 
     def _load_theme_preferences(self) -> None:
         """从数据库加载主题偏好设置"""
@@ -541,14 +614,18 @@ class MainWindow(
         """应用主题到整个界面"""
         from app.ui.theme_manager import ThemeManager
         theme_manager = ThemeManager()
-        
+
         # 获取新的样式表
         new_stylesheet = theme_manager.get_stylesheet()
-        
+
         # 先清空现有样式再应用新样式，确保生效
         self.setStyleSheet("")
         self.setStyleSheet(new_stylesheet)
-        
+
+        # 重新应用随机按钮的特殊样式（全局样式表会覆盖）
+        if hasattr(self, 'btn_random'):
+            self._style_random_button()
+
         # 强制刷新
         self.style().unpolish(self)
         self.style().polish(self)
@@ -603,8 +680,7 @@ class MainWindow(
             <li><b>导入游戏</b> — 全量扫描或增量扫描新游戏</li>
             <li><b>VNDB导入</b> — 从VNDB/Bangumi批量获取封面和元数据</li>
             <li><b>网格/列表视图</b> — 切换显示模式</li>
-            <li><b>🎲随机</b> — 随机选一个游戏，再按从剩余中选</li>
-            <li><b>封面策略</b> — 切换封面获取方式（仅本地/本地优先/网图优先）</li>
+            <li><b>🎲随机</b> — 随机选一个游戏，支持换一个重新随机</li>
         </ul>
         
         <h2>右键菜单</h2>
@@ -672,48 +748,367 @@ class MainWindow(
         self.status.setText("设置已更新")
 
     def _random_pick_game(self) -> None:
-        """从过滤后的游戏列表中随机选择一个游戏"""
+        """从过滤后的游戏列表中随机选择一个游戏（完全独立的真随机）"""
         if not self.filtered_games:
             QMessageBox.information(self, "随机选择", "当前没有可选择的游戏")
             return
-        
-        # 获取可用游戏（排除已选过的）
-        available = [g for g in self.filtered_games if g.id not in self._random_excluded_ids]
-        
-        if not available:
-            # 所有游戏都已选择过，重置排除列表
-            self._random_excluded_ids.clear()
-            available = list(self.filtered_games)
-        
+
         import random
-        selected = random.choice(available)
-        self._random_excluded_ids.add(selected.id)
-        
-        # 选中文本框中的游戏并滚动到可见位置
+        selected = random.choice(self.filtered_games)
+
+        # 在列表/网格中选中并高亮闪烁
         if self._is_grid_view:
             self._game_paged_grid.select_game_by_id(selected.id)
+            # 触发卡片闪烁高亮动画
+            for slot in self._game_paged_grid._slots:
+                if slot.game_id == selected.id:
+                    slot.start_highlight_flash(flashes=10, interval_ms=140)
+                    break
         else:
             for i in range(self.games_list.count()):
                 item = self.games_list.item(i)
                 if item.data(Qt.UserRole) == selected.id:
                     item.setSelected(True)
                     self.games_list.scrollToItem(item)
+                    # 列表视图闪烁高亮
+                    self._flash_list_item(item)
                     break
-        
-        # 更新状态栏
-        remaining = len(available) - 1
-        msg = f"🎲 随机选择了「{selected.custom_name or selected.name}」"
-        if remaining > 0:
-            msg += f"，还有 {remaining} 个游戏可选"
-        else:
-            msg += "，所有游戏已选完，点击重置"
+
+        msg = f"🎲 随机选择了「{selected.name}」"
         self.status.setText(msg)
-        
-        # 显示游戏信息
-        QMessageBox.information(
-            self,
-            "随机选择",
-            f"选中了：{selected.custom_name or selected.name}\n\n"
-            f"剩余可选：{remaining} 个游戏\n"
-            f"（再次点击从剩余游戏中选择）"
-        )
+
+        self._highlight_random_game(selected, len(self.filtered_games) - 1)
+
+    def _flash_list_item(self, item) -> None:
+        """在列表视图中闪烁高亮指定项"""
+        list_widget = self.games_list
+        original_bg = list_widget.palette().color(list_widget.backgroundRole()).name()
+        highlight_color = "rgba(168, 85, 247, 0.3)"  # 紫色高亮
+        normal_color = "transparent"
+
+        flash_count = [0]
+        flash_max = 8
+
+        def do_flash():
+            if flash_count[0] >= flash_max:
+                item.setBackground(QColor(normal_color))
+                return
+            if flash_count[0] % 2 == 0:
+                item.setBackground(QColor(168, 85, 247, 80))
+            else:
+                item.setBackground(QColor(normal_color))
+            flash_count[0] += 1
+            QTimer.singleShot(140, do_flash)
+
+        do_flash()
+
+    def _highlight_random_game(self, game: GameRecord, total_count: int) -> None:
+        """为随机选中的游戏创建一个醒目的弹出对话框，支持换一个功能"""
+        import sys
+
+        # 播放系统提示音
+        try:
+            if sys.platform == "win32":
+                import winsound
+                winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+        except Exception:
+            pass
+
+        try:
+            dialog = QDialog(self)
+            dialog.setWindowTitle("🎲 随机选择")
+            dialog.setWindowFlags(Qt.Dialog | Qt.WindowTitleHint | Qt.WindowCloseButtonHint)
+            dialog.setFixedSize(420, 560)
+            dialog.setStyleSheet(f"""
+                QDialog {{
+                    background: qlineargradient(
+                        x1:0, y1:0, x2:1, y2:1,
+                        stop:0 #1a1a2e, stop:0.5 #16213e, stop:1 #1a1a2e
+                    );
+                    border: 3px solid #FFD700;
+                    border-radius: 16px;
+                }}
+            """)
+
+            layout = QVBoxLayout(dialog)
+            layout.setContentsMargins(32, 28, 32, 28)
+            layout.setSpacing(16)
+
+            # 标题 — 带脉冲动画
+            title_label = QLabel("🎉 随机选中！")
+            title_label.setAlignment(Qt.AlignCenter)
+            title_label.setStyleSheet("""
+                QLabel {
+                    color: #FFD700;
+                    font-size: 26px;
+                    font-weight: bold;
+                }
+            """)
+            layout.addWidget(title_label)
+
+            # 标题脉冲动画
+            title_anim = QPropertyAnimation(title_label, b"windowOpacity")
+            title_anim.setDuration(800)
+            title_anim.setStartValue(1.0)
+            title_anim.setEndValue(0.6)
+            title_anim.setEasingCurve(QEasingCurve.InOutSine)
+            title_anim.setLoopCount(-1)
+            title_anim.start()
+
+            # 封面区域
+            cover_label = QLabel()
+            cover_label.setFixedSize(360, 240)
+            cover_label.setAlignment(Qt.AlignCenter)
+            cover_label.setStyleSheet("""
+                QLabel {
+                    background: #2a2a4a;
+                    border-radius: 12px;
+                    border: 2px solid #FFD700;
+                }
+            """)
+            layout.addWidget(cover_label, 0, Qt.AlignCenter)
+
+            # 游戏名称
+            name_label = QLabel()
+            name_label.setAlignment(Qt.AlignCenter)
+            name_label.setWordWrap(True)
+            name_label.setStyleSheet("""
+                QLabel {
+                    color: #FFFFFF;
+                    font-size: 22px;
+                    font-weight: bold;
+                    padding: 8px;
+                }
+            """)
+            layout.addWidget(name_label)
+
+            # 游戏信息
+            info_layout = QHBoxLayout()
+            info_layout.setSpacing(20)
+
+            vndb_label = QLabel()
+            vndb_label.setStyleSheet("QLabel { color: #8FA8D0; font-size: 14px; }")
+            info_layout.addWidget(vndb_label)
+
+            play_count_label = QLabel()
+            play_count_label.setStyleSheet("QLabel { color: #8FA8D0; font-size: 14px; }")
+            info_layout.addWidget(play_count_label)
+            layout.addLayout(info_layout)
+
+            # 游戏总数提示
+            count_label = QLabel()
+            count_label.setAlignment(Qt.AlignCenter)
+            count_label.setStyleSheet("""
+                QLabel {
+                    color: #9AB8D0;
+                    font-size: 14px;
+                }
+            """)
+            layout.addWidget(count_label)
+
+            # 操作按钮
+            button_layout = QHBoxLayout()
+            button_layout.setSpacing(10)
+
+            launch_btn = QPushButton("▶ 启动游戏")
+            launch_btn.setFixedHeight(44)
+            launch_btn.setStyleSheet("""
+                QPushButton {
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                        stop:0 #4CAF50, stop:1 #45a049);
+                    color: white;
+                    font-size: 14px;
+                    font-weight: bold;
+                    border: none;
+                    border-radius: 8px;
+                    padding: 10px 20px;
+                }
+                QPushButton:hover {
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                        stop:0 #5CBF60, stop:1 #55b059);
+                }
+                QPushButton:pressed {
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                        stop:0 #3CAF40, stop:1 #35a039);
+                }
+            """)
+            button_layout.addWidget(launch_btn)
+
+            shuffle_btn = QPushButton("🔀 换一个")
+            shuffle_btn.setFixedHeight(44)
+            shuffle_btn.setStyleSheet("""
+                QPushButton {
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                        stop:0 #6C5CE7, stop:1 #A855F7);
+                    color: white;
+                    font-size: 14px;
+                    font-weight: bold;
+                    border: none;
+                    border-radius: 8px;
+                    padding: 10px 20px;
+                }
+                QPushButton:hover {
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                        stop:0 #7C6CF7, stop:1 #B865FF);
+                }
+                QPushButton:pressed {
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                        stop:0 #5B4BD6, stop:1 #9340E0);
+                }
+            """)
+            button_layout.addWidget(shuffle_btn)
+
+            details_btn = QPushButton("ℹ 详情")
+            details_btn.setFixedHeight(44)
+            details_btn.setStyleSheet("""
+                QPushButton {
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                        stop:0 #607D8B, stop:1 #506D7B);
+                    color: white;
+                    font-size: 14px;
+                    font-weight: bold;
+                    border: none;
+                    border-radius: 8px;
+                    padding: 10px 20px;
+                }
+                QPushButton:hover {
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                        stop:0 #708D9B, stop:1 #607D8B);
+                }
+            """)
+            button_layout.addWidget(details_btn)
+
+            close_btn = QPushButton("关闭")
+            close_btn.setFixedHeight(44)
+            close_btn.setStyleSheet("""
+                QPushButton {
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                        stop:0 #555555, stop:1 #444444);
+                    color: white;
+                    font-size: 14px;
+                    font-weight: bold;
+                    border: none;
+                    border-radius: 8px;
+                    padding: 10px 20px;
+                }
+                QPushButton:hover {
+                    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+                        stop:0 #666666, stop:1 #555555);
+                }
+            """)
+            close_btn.clicked.connect(dialog.close)
+            button_layout.addWidget(close_btn)
+
+            layout.addLayout(button_layout)
+
+            def update_game(new_game: GameRecord):
+                """更新对话框显示的游戏信息"""
+                nonlocal game
+                game = new_game
+
+                from PySide6.QtGui import QPixmap, QImage
+
+                # 更新封面
+                from PIL import Image
+                from io import BytesIO
+                cover_path = Path(game.cover_path) if game.cover_path else None
+                if cover_path and cover_path.exists():
+                    try:
+                        img = Image.open(cover_path)
+                        img.thumbnail((360, 240), Image.LANCZOS)
+                        buf = BytesIO()
+                        img.save(buf, format='PNG')
+                        qimg = QImage.fromData(buf.getvalue())
+                        pixmap = QPixmap.fromImage(qimg)
+                        cover_label.setPixmap(pixmap)
+                        cover_label.setScaledContents(True)
+                    except Exception:
+                        cover_label.setText("暂无封面")
+                        cover_label.setPixmap(QPixmap())
+                else:
+                    cover_label.setText("暂无封面")
+                    cover_label.setPixmap(QPixmap())
+
+                # 更新名称
+                name_label.setText(game.name)
+
+                # 更新信息
+                vndb_label.setText(f"VNDB ID: {game.vndb_id or '未关联'}")
+                play_count_label.setText(f"游玩次数: {game.play_count}")
+
+                # 更新选中状态
+                if self._is_grid_view:
+                    self._game_paged_grid.select_game_by_id(game.id)
+                    for slot in self._game_paged_grid._slots:
+                        if slot.game_id == game.id:
+                            slot.start_highlight_flash(flashes=6, interval_ms=140)
+                            break
+                else:
+                    for i in range(self.games_list.count()):
+                        item = self.games_list.item(i)
+                        if item.data(Qt.UserRole) == game.id:
+                            item.setSelected(True)
+                            self.games_list.scrollToItem(item)
+                            self._flash_list_item(item)
+                            break
+
+                self.status.setText(f"🎲 随机选择了「{game.name}」")
+
+            def on_shuffle():
+                """换一个随机游戏"""
+                if not self.filtered_games:
+                    return
+                import random
+                new_game = random.choice(self.filtered_games)
+                update_game(new_game)
+                # 播放提示音
+                try:
+                    if sys.platform == "win32":
+                        import winsound
+                        winsound.MessageBeep(winsound.MB_ICONEXCLAMATION)
+                except Exception:
+                    pass
+
+            def on_launch():
+                """启动游戏并关闭对话框"""
+                self.launch_game_by_id(game.id)
+                dialog.close()
+
+            def on_details():
+                """显示游戏详情"""
+                self.open_game_detail(game.id)
+
+            launch_btn.clicked.connect(on_launch)
+            shuffle_btn.clicked.connect(on_shuffle)
+            details_btn.clicked.connect(on_details)
+
+            # 初始化显示第一个游戏
+            update_game(game)
+
+            # 居中显示
+            dialog.move(self.geometry().center() - dialog.rect().center())
+
+            # 入场动画：从透明渐显
+            dialog.setWindowOpacity(0.0)
+            show_anim = QPropertyAnimation(dialog, b"windowOpacity")
+            show_anim.setDuration(300)
+            show_anim.setStartValue(0.0)
+            show_anim.setEndValue(1.0)
+            show_anim.setEasingCurve(QEasingCurve.InOutCubic)
+
+            dialog.show()
+            show_anim.start()
+
+            dialog.exec()
+
+            # 停止动画
+            title_anim.stop()
+
+            # 对话框关闭后再次在网格中选中
+            if self._is_grid_view and hasattr(self, '_game_paged_grid'):
+                self._game_paged_grid.select_game_by_id(game.id)
+
+        except Exception as e:
+            print(f"ERROR in _highlight_random_game: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()

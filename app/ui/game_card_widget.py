@@ -74,7 +74,6 @@ class GameCardWidget(QWidget):
 
         self.cover = QLabel()
         self.cover.setObjectName("gameCover")
-        # Use near 2:3 portrait slot to better fit VNDB/Bangumi covers.
         self.cover.setFixedSize(168, 252)
         self.cover.setAlignment(Qt.AlignCenter)
         self._apply_cover(game.cover_path, game.image_url)
@@ -109,7 +108,6 @@ class GameCardWidget(QWidget):
         root.addWidget(text_widget, 1)
 
     def _apply_cover(self, cover_path: str | None, image_url: str | None = None) -> None:
-        # Show a deterministic state before trying actual image loading.
         self.cover.setPixmap(self._build_placeholder_cover("加载中"))
         if cover_path:
             path = Path(cover_path)
@@ -119,9 +117,6 @@ class GameCardWidget(QWidget):
                     scaled = self._scale_and_center_crop(pix, self.cover.size())
                     self.cover.setPixmap(self._with_bottom_gradient(scaled))
                     return
-        # IMPORTANT: never request network images on UI thread.
-        # VNDB images should be pre-cached by worker threads during import.
-        # If cache is missing, keep placeholder to avoid UI freeze.
         if image_url and image_url.startswith(("http://", "https://")):
             if self._force_no_cover:
                 self.cover.setPixmap(self._build_placeholder_cover("NO COVER"))
@@ -141,7 +136,6 @@ class GameCardWidget(QWidget):
         self.retry_cover_requested.emit(self._game.id)
 
     def _scale_and_center_crop(self, source: QPixmap, target_size: QSize) -> QPixmap:
-        """Scale to cover target rect, then crop center region."""
         target_w = max(1, target_size.width())
         target_h = max(1, target_size.height())
         expanded = source.scaled(
@@ -156,7 +150,6 @@ class GameCardWidget(QWidget):
     def _build_placeholder_cover(self, label: str = "NO COVER") -> QPixmap:
         size = self.cover.size()
         pix = QPixmap(size)
-        # 渐变背景
         gradient = QLinearGradient(0, 0, 0, size.height())
         gradient.setColorAt(0.0, QColor("#2A3242"))
         gradient.setColorAt(1.0, QColor("#1C2230"))
@@ -164,10 +157,8 @@ class GameCardWidget(QWidget):
         painter = QPainter(pix)
         painter.setRenderHint(QPainter.Antialiasing)
         painter.fillRect(pix.rect(), gradient)
-        # 虚线边框
         painter.setPen(QPen(QColor("#3D4A5C"), 1, Qt.DashLine))
         painter.drawRoundedRect(4, 4, size.width() - 8, size.height() - 8, 8, 8)
-        # 图标文字
         painter.setPen(QPen(QColor("#6B7D94"), 1))
         font = painter.font()
         font.setPointSize(11)

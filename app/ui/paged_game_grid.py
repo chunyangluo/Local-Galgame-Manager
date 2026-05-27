@@ -5,9 +5,10 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QContextMenuEvent, QMouseEvent, QWheelEvent
+from PySide6.QtGui import QColor, QContextMenuEvent, QMouseEvent, QWheelEvent
 from PySide6.QtWidgets import (
     QFrame,
+    QGraphicsDropShadowEffect,
     QHBoxLayout,
     QLabel,
     QLayout,
@@ -63,12 +64,11 @@ def _page_height_for_count(count: int, cols: int, card_h: int = CARD_H) -> int:
     if count <= 0:
         return _full_page_height(card_h)
     rows = min(ROWS_PER_PAGE, (count + cols - 1) // cols)
-    return PAGE_PAD * 2 + rows * card_h + max(0, rows - 1) * V_GAP
+    page_h = PAGE_PAD * 2 + rows * card_h + max(0, rows - 1) * V_GAP
+    return max(page_h, _full_page_height(card_h))
 
 
 class FlowLayout(QLayout):
-    """Left-to-right flow with wrapping (same-size items assumed)."""
-
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._items: list[QLayoutItem] = []
@@ -165,34 +165,71 @@ class FlowLayout(QLayout):
         return y - rect.y() + top + bottom
 
 
-class _SnapScrollArea(QScrollArea):
+class _ContinuousScrollArea(QScrollArea):
     def __init__(self, host: "PagedGameGridView") -> None:
         super().__init__()
         self._host = host
 
     def wheelEvent(self, event: QWheelEvent) -> None:
-        dy = event.angleDelta().y()
-        if dy == 0:
-            event.ignore()
-            return
-        direction = 1 if dy < 0 else -1
-        self._host._scroll_by_page_step(direction)
-        event.accept()
+        if self._host.scroll_mode == PagedGameGridView.ScrollMode.CONTINUOUS:
+            super().wheelEvent(event)
+        else:
+            dy = event.angleDelta().y()
+            if dy == 0:
+                event.ignore()
+                return
+            direction = 1 if dy < 0 else -1
+            self._host._scroll_by_page_step(direction)
+            event.accept()
 
 
 class _CardSlot(QFrame):
     clicked = Signal(int)
     double_clicked = Signal(int)
     menu_requested = Signal(int, QPoint)
+    highlight_finished = Signal()
 
     def __init__(self, game_id: int, card: GameCardWidget, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._game_id = game_id
         self.setObjectName("gameCardSlot")
+        self._glow_on = False
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
         lay.addWidget(card, 0, Qt.AlignCenter)
+
+        self._flash_timer = QTimer(self)
+        self._flash_timer.setSingleShot(True)
+        self._flash_count = 0
+        self._flash_max = 0
+
+        # Drop shadow effect for glow
+        self._shadow = QGraphicsDropShadowEffect(self)
+        self._shadow.setBlurRadius(0)
+        self._shadow.setOffset(0, 0)
+        self._shadow.setColor(QColor(255, 215, 0, 0))
+        self.setGraphicsEffect(self._shadow)
+
+    def paintEvent(self, event) -> None:
+        """Override to draw golden glow border on top of normal painting."""
+        super().paintEvent(event)
+        if self._glow_on:
+            from PySide6.QtGui import QColor, QPainter, QPen
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.Antialiasing)
+            w, h = self.width(), self.height()
+            # Golden border
+            pen = QPen(QColor(255, 215, 0, 220), 4)
+            painter.setPen(pen)
+            painter.setBrush(QColor(255, 215, 0, 35))
+            painter.drawRoundedRect(2, 2, w - 4, h - 4, 10, 10)
+            # Inner bright line
+            pen2 = QPen(QColor(255, 240, 150, 180), 1)
+            painter.setPen(pen2)
+            painter.setBrush(Qt.NoBrush)
+            painter.drawRoundedRect(5, 5, w - 10, h - 10, 8, 8)
+            painter.end()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.LeftButton:
@@ -215,17 +252,54 @@ class _CardSlot(QFrame):
         self.style().unpolish(self)
         self.style().polish(self)
 
+    def start_highlight_flash(self, flashes: int = 8, interval_ms: int = 160) -> None:
+        """Start a golden glow flash animation on this card slot."""
+        self._flash_count = 0
+        self._flash_max = flashes
+        self._flash_timer.setInterval(interval_ms)
+        self._flash_timer.timeout.connect(self._do_flash_step)
+        self._do_flash_step()
+
+    def _do_flash_step(self) -> None:
+        if self._flash_count >= self._flash_max:
+            self._flash_timer.stop()
+            try:
+                self._flash_timer.timeout.disconnect(self._do_flash_step)
+            except RuntimeError:
+                pass
+            self._glow_on = False
+            self._shadow.setBlurRadius(0)
+            self._shadow.setColor(QColor(255, 215, 0, 0))
+            self.update()
+            self.set_slot_selected(True)
+            self.highlight_finished.emit()
+            return
+
+        is_on = self._flash_count % 2 == 0
+        self._glow_on = is_on
+        if is_on:
+            self._shadow.setBlurRadius(30)
+            self._shadow.setColor(QColor(255, 215, 0, 200))
+        else:
+            self._shadow.setBlurRadius(0)
+            self._shadow.setColor(QColor(255, 215, 0, 0))
+        self.update()
+        self._flash_count += 1
+        self._flash_timer.start()
+
     @property
     def game_id(self) -> int:
         return self._game_id
 
 
 class PagedGameGridView(QWidget):
-    """Adaptive columns (flow), fixed rows per page, snap to page tops."""
-
     selection_changed = Signal()
     double_clicked = Signal(int)
     context_menu_requested = Signal(int, QPoint)
+
+    class ScrollMode:
+        CONTINUOUS = 0
+        SNAP_TO_PAGE = 1
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -234,6 +308,7 @@ class PagedGameGridView(QWidget):
         self._selected_id: int | None = None
         self._cover_retry_failed: set[int] = set()
         self._on_retry_cover: Callable[[int], None] = lambda _gid: None
+        self._scroll_mode = PagedGameGridView.ScrollMode.SNAP_TO_PAGE
 
         self._page_starts: list[int] = []
         self._page_heights: list[int] = []
@@ -248,7 +323,7 @@ class PagedGameGridView(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(8)
 
-        self._scroll = _SnapScrollArea(self)
+        self._scroll = _ContinuousScrollArea(self)
         self._scroll.setWidgetResizable(True)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
@@ -272,27 +347,52 @@ class PagedGameGridView(QWidget):
 
         nav = QHBoxLayout()
         nav.setSpacing(10)
+        
         self._btn_prev = QPushButton("上一页")
-        self._btn_prev.setToolTip("向上翻一整页（行数固定，列数随窗口宽度变化）")
+        self._btn_prev.setToolTip("向上翻一整页")
         self._btn_prev.clicked.connect(self._go_prev_page)
         nav.addWidget(self._btn_prev)
+        
         self._btn_next = QPushButton("下一页")
         self._btn_next.setToolTip("向下翻一整页")
         self._btn_next.clicked.connect(self._go_next_page)
         nav.addWidget(self._btn_next)
+        
         nav.addStretch(1)
+        
+        self._scroll_mode_btn = QPushButton("分页滚动")
+        self._scroll_mode_btn.setToolTip("切换滚动模式：分页滚动/连续滚动")
+        self._scroll_mode_btn.clicked.connect(self._toggle_scroll_mode)
+        nav.addWidget(self._scroll_mode_btn)
+        
         self._page_label = QLabel("")
         self._page_label.setObjectName("gridPageLabel")
         nav.addWidget(self._page_label)
+        
         root.addLayout(nav)
 
-    def eventFilter(self, obj: QObject, event: QEvent) -> bool:  # type: ignore[override]
+    @property
+    def scroll_mode(self) -> int:
+        return self._scroll_mode
+
+    def _toggle_scroll_mode(self) -> None:
+        if self._scroll_mode == PagedGameGridView.ScrollMode.SNAP_TO_PAGE:
+            self._scroll_mode = PagedGameGridView.ScrollMode.CONTINUOUS
+            self._scroll_mode_btn.setText("连续滚动")
+            self._scroll_mode_btn.setToolTip("当前模式：连续滚动")
+        else:
+            self._scroll_mode = PagedGameGridView.ScrollMode.SNAP_TO_PAGE
+            self._scroll_mode_btn.setText("分页滚动")
+            self._scroll_mode_btn.setToolTip("当前模式：分页滚动")
+            self._snap_scroll_to_page()
+
+    def eventFilter(self, obj: QObject, event: QEvent) -> bool:
         if obj is self._scroll.viewport() and event.type() == QEvent.Type.Resize:
             if self._games:
                 self._rebuild_timer.start()
         return super().eventFilter(obj, event)
 
-    def resizeEvent(self, event) -> None:  # type: ignore[override]
+    def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         if self._games:
             self._rebuild_timer.start()
@@ -367,7 +467,7 @@ class PagedGameGridView(QWidget):
         y = 0
 
         card_ratio = CARD_H / CARD_W
-        card_h = int(self._current_card_w * card_ratio)
+        card_h = max(CARD_H, int(self._current_card_w * card_ratio))
 
         for p in range(num_pages):
             start = p * spp
@@ -403,9 +503,12 @@ class PagedGameGridView(QWidget):
 
         total_h = y
         vp_h = max(1, self._scroll.viewport().height())
+        
         if self._page_starts:
             last_top = self._page_starts[-1]
-            pad_bottom = max(0, last_top + vp_h - total_h)
+            last_page_h = self._page_heights[-1] if self._page_heights else 0
+            min_total = last_top + last_page_h + 20
+            pad_bottom = max(0, vp_h - last_page_h, min_total - total_h)
             if pad_bottom > 0:
                 tail = QWidget()
                 tail.setFixedHeight(pad_bottom)
@@ -422,7 +525,8 @@ class PagedGameGridView(QWidget):
         bar.setValue(int(ratio * max_v))
         bar.blockSignals(False)
         self._apply_scrollbar_steps()
-        self._snap_scroll_to_page()
+        if self._scroll_mode == PagedGameGridView.ScrollMode.SNAP_TO_PAGE:
+            self._snap_scroll_to_page()
         self._update_nav_state()
         self._restore_selection_styles()
 
@@ -430,10 +534,14 @@ class PagedGameGridView(QWidget):
         bar = self._scroll.verticalScrollBar()
         if not self._page_heights:
             return
-        step = min(self._page_heights)
-        mx = max(self._page_heights)
-        bar.setSingleStep(step)
-        bar.setPageStep(mx)
+        if self._scroll_mode == PagedGameGridView.ScrollMode.SNAP_TO_PAGE:
+            step = min(self._page_heights)
+            mx = max(self._page_heights)
+            bar.setSingleStep(step)
+            bar.setPageStep(mx)
+        else:
+            bar.setSingleStep(20)
+            bar.setPageStep(self._scroll.viewport().height())
 
     def _page_index_for_value(self, v: int) -> int:
         if not self._page_starts:
@@ -444,12 +552,13 @@ class PagedGameGridView(QWidget):
         return 0
 
     def _snap_scroll_to_page(self) -> None:
+        if self._scroll_mode != PagedGameGridView.ScrollMode.SNAP_TO_PAGE:
+            return
         bar = self._scroll.verticalScrollBar()
         if not self._page_starts or not self._games:
             return
         v = bar.value()
         max_v = bar.maximum()
-        # nearest page top
         best_i = 0
         best_d = abs(v - self._page_starts[0])
         for i, s in enumerate(self._page_starts):
@@ -468,7 +577,6 @@ class PagedGameGridView(QWidget):
         if not self._page_starts:
             return
         i = self._page_index_for_value(bar.value())
-        # direction > 0: angleDelta.y() < 0 → 内容向下滚 → 下一页
         if direction > 0:
             ni = min(len(self._page_starts) - 1, i + 1)
         else:
@@ -476,7 +584,8 @@ class PagedGameGridView(QWidget):
         bar.setValue(self._page_starts[ni])
 
     def _on_scroll_value_changed(self, _value: int) -> None:
-        self._snap_timer.start()
+        if self._scroll_mode == PagedGameGridView.ScrollMode.SNAP_TO_PAGE:
+            self._snap_timer.start()
         self._update_page_label_only()
 
     def _update_page_label_only(self) -> None:
@@ -505,23 +614,21 @@ class PagedGameGridView(QWidget):
 
     def _go_prev_page(self) -> None:
         self._scroll_by_page_step(-1)
-        self._snap_scroll_to_page()
+        if self._scroll_mode == PagedGameGridView.ScrollMode.SNAP_TO_PAGE:
+            self._snap_scroll_to_page()
 
     def _go_next_page(self) -> None:
         self._scroll_by_page_step(1)
-        self._snap_scroll_to_page()
+        if self._scroll_mode == PagedGameGridView.ScrollMode.SNAP_TO_PAGE:
+            self._snap_scroll_to_page()
 
     def select_game_by_id(self, game_id: int) -> None:
-        """通过游戏ID选择游戏并滚动到可见位置"""
-        # 找到游戏所在的页
         spp = self._slots_per_page()
         for idx, game in enumerate(self._games):
             if game.id == game_id:
                 target_page = idx // spp
-                # 滚动到目标页
                 if target_page < len(self._page_starts):
                     self._scroll.verticalScrollBar().setValue(self._page_starts[target_page])
-                # 选择游戏
                 self._selected_id = game_id
                 self._restore_selection_styles()
                 self._update_nav_state()

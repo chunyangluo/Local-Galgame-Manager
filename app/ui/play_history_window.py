@@ -113,25 +113,82 @@ class PlayHistoryRowWidget(QWidget):
         text_col.addStretch(1)
         outer.addLayout(text_col, 1)
 
-        btn_launch = QPushButton("启动")
+        btn_launch = QPushButton("▶ 启动")
         btn_launch.setToolTip("启动该游戏（退出后写入新游玩记录）")
         btn_launch.setAutoDefault(False)
         btn_launch.setDefault(False)
+        btn_launch.setStyleSheet("""
+            QPushButton {
+                background: #3A5A8A;
+                border: 1px solid #5A8AC8;
+                border-radius: 6px;
+                padding: 6px 14px;
+                color: #F0F3F8;
+                font-weight: 600;
+                font-size: 12px;
+                min-width: 60px;
+            }
+            QPushButton:hover {
+                background: #4A6AB8;
+                border-color: #7AA8D8;
+            }
+            QPushButton:pressed {
+                background: #2A4A7A;
+            }
+        """)
         btn_launch.clicked.connect(self._do_launch)
         outer.addWidget(btn_launch, 0, Qt.AlignVCenter)
 
         if show_le_launch:
-            btn_le = QPushButton("LE")
+            btn_le = QPushButton("🌐 LE")
             btn_le.setToolTip("Locale Emulator 转区启动")
             btn_le.setAutoDefault(False)
             btn_le.setDefault(False)
+            btn_le.setStyleSheet("""
+                QPushButton {
+                    background: #5A6A4A;
+                    border: 1px solid #7A8A6A;
+                    border-radius: 6px;
+                    padding: 6px 14px;
+                    color: #E8F0E0;
+                    font-weight: 600;
+                    font-size: 12px;
+                    min-width: 50px;
+                }
+                QPushButton:hover {
+                    background: #6A7A5A;
+                    border-color: #9AB88A;
+                }
+                QPushButton:pressed {
+                    background: #4A5A3A;
+                }
+            """)
             btn_le.clicked.connect(self._do_launch_le)
             outer.addWidget(btn_le, 0, Qt.AlignVCenter)
 
-        btn_detail = QPushButton("详情")
+        btn_detail = QPushButton("ℹ 详情")
         btn_detail.setToolTip("打开游戏详情页")
         btn_detail.setAutoDefault(False)
         btn_detail.setDefault(False)
+        btn_detail.setStyleSheet("""
+            QPushButton {
+                background: #4A5568;
+                border: 1px solid #6A7588;
+                border-radius: 6px;
+                padding: 6px 14px;
+                color: #C8D0DC;
+                font-weight: 500;
+                font-size: 12px;
+                min-width: 60px;
+            }
+            QPushButton:hover {
+                background: #5A6578;
+                border-color: #8A95A8;
+            }
+            QPushButton:pressed {
+                background: #3A4558;
+            }
+        """)
         btn_detail.clicked.connect(lambda: self._main.open_game_detail(self._row.game_id))
         outer.addWidget(btn_detail, 0, Qt.AlignVCenter)
 

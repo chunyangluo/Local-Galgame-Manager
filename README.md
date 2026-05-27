@@ -1,6 +1,6 @@
 # Local Galgame Manager
 
-**版本**: v2.0.6 | [下载](https://github.com/chunyangluo/Local-Galgame-Manager/releases/tag/v2.0.6)
+**版本**: v2.0.7 | [下载](https://github.com/chunyangluo/Local-Galgame-Manager/releases/tag/v2.0.7)
 
 <p align="center">
   <img src="docs/assets/main-window.png" alt="Local Galgame Manager 主界面" width="820" />
