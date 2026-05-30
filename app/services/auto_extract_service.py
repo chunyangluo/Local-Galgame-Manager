@@ -1,0 +1,418 @@
+"""Bridge to integrations/自动化解压工具 — automated archive extraction."""
+
+from __future__ import annotations
+
+import asyncio
+import sys
+import threading
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable
+
+import yaml
+
+from app.services.paths import auto_extract_config_path, auto_extract_tool_dir
+
+MIN_ARCHIVE_SIZE_MB = 200
+MIN_ARCHIVE_SIZE_BYTES = MIN_ARCHIVE_SIZE_MB * 1024 * 1024
+
+ProgressCallback = Callable[[dict], None]
+
+_lock = threading.Lock()
+_runtime_ready = False
+
+_INTEGRATION_DEPS = (
+    ("loguru", "loguru"),
+    ("yaml", "pyyaml"),
+    ("watchdog", "watchdog"),
+    ("pyzipper", "pyzipper"),
+    ("lz4", "lz4"),
+    ("cryptography", "cryptography"),
+    ("pydantic", "pydantic"),
+)
+
+
+@dataclass
+class AutoExtractResult:
+    success: bool
+    file_name: str = ""
+    extract_dir: str = ""
+    used_password: str = ""
+    error: str = ""
+    archive_type: str = ""
+    post_process: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
+class AutoExtractScanResult:
+    total: int = 0
+    success: int = 0
+    failed: int = 0
+    skipped: int = 0
+    cancelled: bool = False
+
+
+def is_auto_extract_available() -> bool:
+    if auto_extract_tool_dir() is None:
+        return False
+    for _mod, _pip in _INTEGRATION_DEPS:
+        try:
+            __import__(_mod)
+        except ImportError:
+            return False
+    seven_zip = auto_extract_tool_dir() / "bin" / "7za.exe"
+    return seven_zip.is_file()
+
+
+def auto_extract_missing_reason() -> str:
+    root = auto_extract_tool_dir()
+    if root is None:
+        return "未找到 integrations/自动化解压工具，请确认仓库完整。"
+    if not (root / "main.py").is_file():
+        return "自动化解压工具目录不完整（缺少 main.py）。"
+    if not (root / "bin" / "7za.exe").is_file():
+        return "缺少 bin/7za.exe，请确认 7-Zip 组件已随工具一并提供。"
+    missing: list[str] = []
+    for _mod, pip_name in _INTEGRATION_DEPS:
+        try:
+            __import__(_mod)
+        except ImportError:
+            missing.append(pip_name)
+    if missing:
+        return "缺少依赖：" + "、".join(missing) + "。请执行：pip install " + " ".join(missing)
+    return ""
+
+
+def config_yaml_path() -> Path | None:
+    return auto_extract_config_path()
+
+
+def read_directory_config() -> dict[str, str]:
+    path = config_yaml_path()
+    if path is None or not path.is_file():
+        return {}
+    with open(path, encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    dirs = data.get("directories") or {}
+    keys = ("watch", "target", "archive", "failed", "temp", "game_save")
+    return {k: str(dirs.get(k, "")) for k in keys}
+
+
+def write_directory_config(updates: dict[str, str]) -> None:
+    path = config_yaml_path()
+    if path is None:
+        raise FileNotFoundError("config.yaml not found")
+    with open(path, encoding="utf-8") as f:
+        data = yaml.safe_load(f) or {}
+    directories = dict(data.get("directories") or {})
+    for key, value in updates.items():
+        if value.strip():
+            directories[key] = value.strip()
+    data["directories"] = directories
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
+    reset_runtime()
+
+
+def reset_runtime() -> None:
+    global _runtime_ready
+    with _lock:
+        _runtime_ready = False
+    root = auto_extract_tool_dir()
+    if root is None:
+        return
+    root_str = str(root.resolve())
+    if root_str in sys.path:
+        try:
+            import core.config as tool_config  # type: ignore[import-not-found]
+
+            tool_config._settings = None  # noqa: SLF001
+        except ImportError:
+            pass
+
+
+def _tool_root_str() -> str:
+    root = auto_extract_tool_dir()
+    if root is None:
+        raise FileNotFoundError("auto extract tool not found")
+    return str(root.resolve())
+
+
+def _ensure_runtime() -> None:
+    global _runtime_ready
+    if not is_auto_extract_available():
+        raise RuntimeError(auto_extract_missing_reason())
+    with _lock:
+        if _runtime_ready:
+            return
+        root_str = _tool_root_str()
+        if root_str not in sys.path:
+            sys.path.insert(0, root_str)
+        from core.config import init_settings  # type: ignore[import-not-found]
+        from core.extractor import Extractor  # type: ignore[import-not-found]
+        from core.file_manager import FileManager  # type: ignore[import-not-found]
+        from core.password_manager import PasswordManager  # type: ignore[import-not-found]
+        from core.watcher import WatcherService  # type: ignore[import-not-found]
+
+        cfg = config_yaml_path()
+        init_settings(cfg if cfg else None)
+        password_manager = PasswordManager()
+        extractor = Extractor(password_manager)
+        file_manager = FileManager()
+        watcher = WatcherService(extractor, file_manager)
+        globals()["_extractor"] = extractor
+        globals()["_file_manager"] = file_manager
+        globals()["_watcher"] = watcher
+        _runtime_ready = True
+
+
+def _result_from_tool(result: Any, post_process: dict | None) -> AutoExtractResult:
+    return AutoExtractResult(
+        success=bool(result.success),
+        file_name=str(result.file_name or ""),
+        extract_dir=str(result.extract_dir or ""),
+        used_password=str(result.used_password or ""),
+        error=str(result.error or ""),
+        archive_type=str(result.archive_type or ""),
+        post_process=dict(post_process or {}),
+    )
+
+
+async def _extract_async(
+    file_path: str,
+    *,
+    password: str | None,
+    target_dir: str | None,
+) -> AutoExtractResult:
+    _ensure_runtime()
+    extractor = globals()["_extractor"]
+    file_manager = globals()["_file_manager"]
+    custom_password = password if password else None
+    output_dir = target_dir if target_dir else None
+    result = await extractor.extract(
+        file_path=file_path,
+        custom_password=custom_password,
+        output_dir=output_dir,
+    )
+    post_result, _ = file_manager.handle_extract_result(result)
+    return _result_from_tool(result, post_result)
+
+
+def _collect_archive_entries(watch_dir: Path) -> tuple[list[tuple[Path, str]], int]:
+    """Enumerate archive entry files under watch_dir.
+
+    Returns (entries, skipped_count). Mirrors the bundled watcher's grouping/size
+    rules but without report generation or the print_warning bug.
+    """
+    from core.archive_detector import (  # type: ignore[import-not-found]
+        detect_7z_split_volume_set,
+        detect_archive_type,
+        detect_split_volume_set,
+        is_7z_split_part,
+        is_download_temp_file,
+    )
+    from core.config import get_settings  # type: ignore[import-not-found]
+
+    settings = get_settings()
+    skip_dirs = set()
+    for key in ("archive", "temp", "target", "failed"):
+        try:
+            skip_dirs.add(Path(getattr(settings.directories, key)).resolve())
+        except (TypeError, ValueError):
+            pass
+
+    entries: list[tuple[Path, str]] = []
+    skipped = 0
+    processed_bases: set[str] = set()
+    processed_files: set[str] = set()
+
+    all_items = []
+    for item in watch_dir.rglob("*"):
+        if not item.is_file():
+            continue
+        if any(item.is_relative_to(d) for d in skip_dirs if d.exists()):
+            continue
+        all_items.append(item)
+    all_items.sort(key=lambda x: x.name)
+
+    for item in all_items:
+        if str(item) in processed_files:
+            continue
+        if is_download_temp_file(item):
+            continue
+        atype = detect_archive_type(item)
+        if atype is None:
+            continue
+
+        split_7z = detect_7z_split_volume_set(item)
+        if not split_7z:
+            part_7z = is_7z_split_part(item)
+            if part_7z:
+                split_7z = detect_7z_split_volume_set(part_7z["first_part"])
+        if split_7z:
+            base = split_7z["base_name"]
+            if base in processed_bases:
+                continue
+            try:
+                total_size = sum(
+                    Path(f).stat().st_size
+                    for f in split_7z["all_files"]
+                    if Path(f).exists()
+                )
+            except OSError:
+                continue
+            if total_size < MIN_ARCHIVE_SIZE_BYTES:
+                skipped += 1
+            else:
+                processed_bases.add(base)
+                for f in split_7z["all_files"]:
+                    processed_files.add(str(f))
+                entries.append((Path(split_7z["extract_entry"]), atype))
+            continue
+
+        split_info = detect_split_volume_set(item)
+        if split_info:
+            base = split_info["base_name"]
+            if base in processed_bases:
+                continue
+            try:
+                total_size = sum(
+                    Path(f).stat().st_size
+                    for f in split_info["all_files"]
+                    if Path(f).exists()
+                )
+            except OSError:
+                total_size = 0
+            if total_size < MIN_ARCHIVE_SIZE_BYTES:
+                skipped += 1
+            else:
+                processed_bases.add(base)
+                for f in split_info["all_files"]:
+                    processed_files.add(str(f))
+                entries.append((item, atype))
+            continue
+
+        try:
+            if item.stat().st_size < MIN_ARCHIVE_SIZE_BYTES:
+                skipped += 1
+                continue
+        except OSError:
+            continue
+        entries.append((item, atype))
+
+    return entries, skipped
+
+
+async def _scan_async(
+    progress: ProgressCallback | None,
+    should_cancel: Callable[[], bool] | None,
+) -> AutoExtractScanResult:
+    _ensure_runtime()
+    extractor = globals()["_extractor"]
+    file_manager = globals()["_file_manager"]
+
+    def emit(payload: dict) -> None:
+        if progress is not None:
+            progress(payload)
+
+    def cancelled() -> bool:
+        return bool(should_cancel and should_cancel())
+
+    cfg = read_directory_config()
+    watch_dir = Path(cfg.get("watch", "")).resolve()
+    if not cfg.get("watch") or not watch_dir.is_dir():
+        emit({"phase": "error", "message": f"监控目录不存在：{watch_dir}"})
+        return AutoExtractScanResult()
+
+    emit({"phase": "collecting", "message": f"正在枚举压缩包：{watch_dir}"})
+    entries, skipped = _collect_archive_entries(watch_dir)
+    total = len(entries)
+    emit({"phase": "collected", "total": total, "skipped": skipped})
+
+    result = AutoExtractScanResult(skipped=skipped)
+    if total == 0:
+        emit({"phase": "empty", "message": "未发现满足条件的压缩包（≥200MB）"})
+        return result
+
+    for index, (item, _atype) in enumerate(entries, start=1):
+        if cancelled():
+            result.cancelled = True
+            emit({"phase": "cancelled", "index": index - 1, "total": total})
+            return result
+        emit({
+            "phase": "extracting",
+            "index": index,
+            "total": total,
+            "name": item.name,
+        })
+        result.total += 1
+        try:
+            extract_result = await extractor.extract(str(item))
+            post_result, _moved = file_manager.handle_extract_result(extract_result)
+            if extract_result.success:
+                result.success += 1
+                emit({
+                    "phase": "file_done",
+                    "index": index,
+                    "total": total,
+                    "name": item.name,
+                    "success": True,
+                    "message": str(extract_result.extract_dir or ""),
+                })
+            else:
+                result.failed += 1
+                emit({
+                    "phase": "file_done",
+                    "index": index,
+                    "total": total,
+                    "name": item.name,
+                    "success": False,
+                    "message": str(extract_result.error or "未知错误"),
+                })
+        except Exception as exc:
+            result.failed += 1
+            emit({
+                "phase": "file_done",
+                "index": index,
+                "total": total,
+                "name": item.name,
+                "success": False,
+                "message": str(exc),
+            })
+
+    emit({"phase": "finished", "total": total})
+    return result
+
+
+def extract_archive(
+    file_path: str | Path,
+    *,
+    password: str = "",
+    target_dir: str = "",
+) -> AutoExtractResult:
+    path = Path(file_path).resolve()
+    if not path.is_file():
+        return AutoExtractResult(success=False, error="文件不存在")
+    return asyncio.run(
+        _extract_async(
+            str(path),
+            password=password.strip() or None,
+            target_dir=target_dir.strip() or None,
+        )
+    )
+
+
+def scan_watch_directory(
+    *,
+    progress: ProgressCallback | None = None,
+    should_cancel: Callable[[], bool] | None = None,
+) -> AutoExtractScanResult:
+    return asyncio.run(_scan_async(progress, should_cancel))
+
+
+def report_output_dir() -> Path | None:
+    root = auto_extract_tool_dir()
+    if root is None:
+        return None
+    d = root / "extract_report"
+    return d if d.is_dir() else d

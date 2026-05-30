@@ -1,5 +1,28 @@
 # Changelog
 
+## v2.0.11
+- **自动化解压集成**：`integrations/自动化解压工具` 接入主程序；「更多」→「自动化解压工具…」支持目录配置（简洁/详细）、单次解压、扫描并解压（进度条、分文件反馈、可停止）、彩色日志与完成 Toast。
+- **主界面体验**：工具栏分为「搜索与筛选 / 导入管理 / 视图与浏览」；统一主操作/辅助按钮样式；搜索历史下拉、游玩状态筛选与排序；分页显示总数/页码并支持跳转。
+- **封面与卡片**：统一「暂无封面」占位、hover 提示与点击添加；联网拉取时卡片进度态；游玩次数/收藏 tooltip。
+- **操作反馈**：轻量 Toast（备份、恢复、封面修复等）；错误弹窗附解决建议；扫描/VNDB 等保留进度条。
+- **「更多」菜单**：按场景分组（高频操作、工具箱、设置）；备份/恢复与开机启动、启动前备份置于顶层可切换项。
+- **测试**：新增自动解压、HBE、插件、路径迁移、删除服务等用例，全量 **166** 项通过。
+
+## v2.0.10
+- **HBE 解密集成**：`integrations/hbe-decryptor` 接入主程序；「更多」→「HBE 解密工具…」支持单文件（含 AUTO）与批量解密；依赖 `cryptography`。
+
+## v2.0.9
+- **插件系统 v1**：`BasePlugin` 多钩子（扫描变换/过滤、启动修改、生命周期）；插件包 `plugin.json` + `plugin.py`；示例插件自动安装到用户目录。
+- **插件管理 UI**：显示版本/说明/钩子、打开目录、热重载、按插件名 JSON 配置（`plugin_configs`）。
+- **脚手架**：`python scripts/scaffold_plugin.py <name>` 快速创建插件包。
+- **文档**：重写 `docs/PLUGIN_GUIDE.md`。
+
+## v2.0.8
+- **数据管理**：「更多」→「数据管理…」浏览库内游戏并从库中删除；右键菜单与游戏详情均支持删除。
+- **删除确认**：首次删除二次确认，可选「下次不再提示」；可选「同时删除游戏安装文件夹」；数据管理窗口可批量勾选删盘（跳过确认时仍有额外确认）。
+- **路径规范化迁移**：`scripts/migrate_game_paths.py` / `python -m app.maintenance.migrate_paths` 合并因 `E:\` 与 `E:/` 等写法产生的重复记录，并统一 `root_dir` 与扫描路径。
+- **稳定性修复**：备份恢复前关闭 SQLite 连接；删除游戏时先删磁盘再删库记录；删除安装目录时使用 `custom_launch_exe` 校验；`root_dir` 写入与增量扫描统一规范化；修复 `delete_games_not_in_scan` 的 `LIKE` 误匹配；启动后窗口标题捕获线程 `join`；每窗口独立 `_launching_game_ids`。
+
 ## v2.0.7
 - **随机按钮优化**：紫粉渐变背景 + 脉冲呼吸灯效果，更加醒目。
 - **随机逻辑改进**：改为完全独立的真随机模式（每次独立选择，支持重复选中）。
@@ -62,4 +85,3 @@
 ## v1.0.0
 - Bootstrap project structure.
 - Implement scanning/import and launcher foundations.
-- Add UI shell, tray behavior, search/filter, backup/restore.

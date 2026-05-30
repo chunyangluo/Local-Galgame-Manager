@@ -4,6 +4,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QThreadPool, Qt
 
+from app.ui.game_card_widget import GameCardWidget
 from app.workers import CoverRefetchTask
 
 
@@ -62,6 +63,7 @@ class CoverMixin:
         if not game.image_url.startswith(("http://", "https://")):
             return
         self._cover_retry_pending.add(game_id)
+        self._set_card_cover_loading(game_id, True)
         task = CoverRefetchTask(
             game_id=game.id,
             vndb_id=game.vndb_id,
@@ -79,6 +81,7 @@ class CoverMixin:
         self, game_id: int, cover_path: str, success: bool, user_triggered: bool
     ) -> None:
         self._cover_retry_pending.discard(game_id)
+        self._set_card_cover_loading(game_id, False)
         game = next((g for g in self.games_cache if g.id == game_id), None)
         if game is None:
             game = self.db.get_game_by_id(self.current_user_id, game_id)
@@ -111,15 +114,21 @@ class CoverMixin:
                 self.status.setText(
                     f"启动自动修复封面完成：成功 {self._cover_retry_startup_success}/{self._cover_retry_startup_total}"
                 )
+                self._cover_toast(
+                    f"封面修复完成：{self._cover_retry_startup_success}/{self._cover_retry_startup_total}",
+                    "success" if self._cover_retry_startup_success else "info",
+                )
                 return
 
         if user_triggered:
             if success:
                 self.refresh_games()
                 self.status.setText("封面已重新获取")
+                self._cover_toast("封面修复成功", "success")
             else:
                 self.refresh_games()
-                self.status.setText("重新获取封面失败，已标记为 NO COVER")
+                self.status.setText("重新获取封面失败，已标记为暂无封面")
+                self._cover_toast("封面修复失败，可右键手动添加封面", "warning")
 
     def _toggle_online_cover(self) -> None:
         current_index = self.COVER_FETCH_MODE_ORDER.index(self.cover_fetch_mode)
@@ -159,6 +168,29 @@ class CoverMixin:
             QMessageBox.critical(self, "封面更新失败", str(exc))
             return False
         return True
+
+    def _cover_toast(self, message: str, level: str = "info") -> None:
+        fn = getattr(self, "show_toast", None)
+        if callable(fn):
+            fn(message, level)
+
+    def _set_card_cover_loading(self, game_id: int, loading: bool) -> None:
+        if getattr(self, "_is_grid_view", False) and hasattr(self, "_game_paged_grid"):
+            card = self._game_paged_grid.card_for_game_id(game_id)
+            if card is not None:
+                card.set_cover_loading(loading)
+                return
+        games_list = getattr(self, "games_list", None)
+        if games_list is None:
+            return
+        for i in range(games_list.count()):
+            item = games_list.item(i)
+            if item is None or item.data(Qt.UserRole) != game_id:
+                continue
+            widget = games_list.itemWidget(item)
+            if isinstance(widget, GameCardWidget):
+                widget.set_cover_loading(loading)
+            break
 
     def retry_cover_for_game_id(self, game_id: int) -> bool:
         game = self.db.get_game_by_id(self.current_user_id, game_id)

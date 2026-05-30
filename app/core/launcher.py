@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import os
 import subprocess
 import sys
 import time
@@ -39,7 +40,9 @@ class GameLauncher:
             raise FileNotFoundError(f"Launch target not found: {exe_path}")
         if as_admin:
             return self._launch_as_admin(exe)
-        process = subprocess.Popen([str(exe)], cwd=str(exe.parent))
+        env = os.environ.copy()
+        env["PATH"] = str(exe.parent) + os.pathsep + env["PATH"]
+        process = subprocess.Popen([str(exe)], cwd=str(exe.parent), env=env)
         started = int(time.time())
         process.wait()
         ended = int(time.time())
@@ -66,9 +69,12 @@ class GameLauncher:
         # titles (e.g. MoleBox "boxfile") resolve archives relative to cwd; using LE's
         # install dir here breaks those with "COULD NOT OPEN BOXFILE". LEProc still
         # loads its DLLs from its own executable directory via the Windows loader.
+        env = os.environ.copy()
+        env["PATH"] = str(exe.parent) + os.pathsep + env["PATH"]
         process = subprocess.Popen(
             [str(leproc.resolve()), abs_target],
             cwd=str(exe.parent),
+            env=env,
         )
         started = int(time.time())
         process.wait()

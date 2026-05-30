@@ -58,7 +58,7 @@ class VndbImportResultDialog(QDialog):
         layout = QVBoxLayout(self)
 
         failed = len(self._outcomes) - sum(1 for o in self._outcomes if o.success)
-        status = "已取消" if False else "已完成"  # cancelled removed from args
+        status = "已取消" if cancelled else "已完成"
         summary = QLabel(
             f"{status}：共 {len(self._outcomes)} 个，成功 {sum(1 for o in self._outcomes if o.success)}，失败 {failed}"
         )

@@ -545,7 +545,8 @@ QFrame#gameCardSlot {{
     border-radius: 10px;
 }}
 QFrame#gameCardSlot:hover {{
-    border: 2px solid {c.accent_color};
+    background: {c.card_bg};
+    border: 2px solid {c.accent_light};
 }}
 QFrame#gameCardSlot[selected="true"] {{
     background: {c.accent_dark};

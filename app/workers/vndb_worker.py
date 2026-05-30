@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from PySide6.QtCore import QObject, QRunnable, QThreadPool, Signal
 
-from app.core.cover_manager import CoverManager
+from app.services.cover_manager import CoverManager
 from app.data.database import VndbImportRow
 from app.services.vndb_service import VndbOutcome, VndbService
 

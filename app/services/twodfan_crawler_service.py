@@ -9,7 +9,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, Signal
 
-from app.paths import default_twodfan_sqlite_path
+from app.services.paths import default_twodfan_sqlite_path
 
 
 class TwodfanCrawlerService(QObject):

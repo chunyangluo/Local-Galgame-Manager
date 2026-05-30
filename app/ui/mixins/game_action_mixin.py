@@ -135,8 +135,14 @@ class GameActionMixin:
         self.status.setText(f"快捷方式已创建: {shortcut}")
 
     def _backup(self) -> None:
-        archive = self.backup_service.export_backup(self.db.db_path)
+        try:
+            archive = self.backup_service.export_backup(self.db.db_path)
+        except Exception as exc:
+            self.status.setText("备份失败")
+            self._notify_error("备份失败", str(exc), "请检查目标磁盘空间与写入权限后重试。")
+            return
         self.status.setText(f"备份完成: {archive}")
+        self._notify_toast("备份完成", "success")
 
     def _restore(self) -> None:
         from PySide6.QtWidgets import QFileDialog
@@ -145,11 +151,37 @@ class GameActionMixin:
         if not archive_path:
             return
         try:
-            self.backup_service.import_backup(Path(archive_path), self.db.db_path)
+            self.db.close()
+            try:
+                self.backup_service.import_backup(Path(archive_path), self.db.db_path)
+            finally:
+                self.db.reopen()
             self.refresh_games()
             self.status.setText("恢复成功")
+            self._notify_toast("恢复成功", "success")
         except Exception as exc:
-            QMessageBox.critical(self, "恢复失败", str(exc))
+            if self.db.conn is None:
+                try:
+                    self.db.reopen()
+                except Exception:
+                    pass
+            self._notify_error(
+                "恢复失败",
+                str(exc),
+                "请确认所选 zip 为本程序导出的备份文件，且未被占用。",
+            )
+
+    def _notify_toast(self, message: str, level: str = "info") -> None:
+        fn = getattr(self, "show_toast", None)
+        if callable(fn):
+            fn(message, level)
+
+    def _notify_error(self, title: str, message: str, suggestion: str = "") -> None:
+        fn = getattr(self, "show_error", None)
+        if callable(fn):
+            fn(title, message, suggestion)
+        else:
+            QMessageBox.critical(self, title, message)
 
     def _toggle_startup(self) -> None:
         enabled = self.system_service.is_startup_enabled()
@@ -212,10 +244,13 @@ class GameActionMixin:
         from PySide6.QtWidgets import QDialog
         from app.ui.dialogs import PluginSettingsDialog
 
-        self.plugin_manager.load_all(disabled_plugins=self._disabled_plugins)
+        self.plugin_manager.set_plugin_configs(self.db.get_plugin_configs())
+        self.plugin_manager.reload(disabled_plugins=self._disabled_plugins)
         dialog = PluginSettingsDialog(
             load_info=self.plugin_manager.load_info,
             disabled_names=self._disabled_plugins,
+            plugin_dir=self.plugin_manager.plugin_dir,
+            plugin_manager=self.plugin_manager,
             parent=self,
         )
         if dialog.exec() != QDialog.Accepted:
@@ -225,7 +260,8 @@ class GameActionMixin:
             return
         self._disabled_plugins = new_disabled
         self.db.set_disabled_plugins(sorted(self._disabled_plugins))
-        self.plugin_manager.load_all(disabled_plugins=self._disabled_plugins)
+        self.plugin_manager.set_plugin_configs(self.db.get_plugin_configs())
+        self.plugin_manager.reload(disabled_plugins=self._disabled_plugins)
         enabled_count = len(self.plugin_manager.plugins)
         total_count = len(self.plugin_manager.available_plugin_names)
         failed_count = sum(
@@ -237,14 +273,24 @@ class GameActionMixin:
         self.status.setText(msg)
 
     def _open_twodfan_library_dialog(self) -> None:
-        from app.ui.twodfan_library_dialog import TwodfanLibraryDialog
+        from app.ui.dialogs.twodfan_library_dialog import TwodfanLibraryDialog
 
         dlg = TwodfanLibraryDialog(self)
         dlg.exec()
 
+    def _open_hbe_decrypt_dialog(self) -> None:
+        from app.ui.dialogs.hbe_decrypt_dialog import HbeDecryptDialog
+
+        HbeDecryptDialog(self).exec()
+
+    def _open_auto_extract_dialog(self) -> None:
+        from app.ui.dialogs.auto_extract_dialog import AutoExtractDialog
+
+        AutoExtractDialog(self).exec()
+
     def _start_twodfan_crawl(self) -> None:
         from app.ui.dialogs.twodfan_crawl_dialog import TwodfanCrawlDialog
-        from app.paths import default_twodfan_sqlite_path
+        from app.services.paths import default_twodfan_sqlite_path
 
         # Auto-configure the hints DB path if not set
         current_path = self.db.get_twodfan_hints_db_path()
@@ -358,4 +404,43 @@ class GameActionMixin:
         )
         shortcut_action.setToolTip("在桌面创建游戏快捷方式")
 
+        menu.addSeparator()
+
+        delete_action = menu.addAction("🗑️ 从库中删除")
+        delete_action.triggered.connect(
+            lambda checked=False, g=game: self._delete_game_from_library_for_record(g)
+        )
+        delete_action.setToolTip("从库中删除；可在确认框中勾选是否一并删除安装文件夹")
+
         menu.exec(menu_anchor if menu_anchor is not None else QCursor.pos())
+
+    def _open_game_data_manager(self) -> None:
+        from app.ui.dialogs.game_data_manager_dialog import GameDataManagerDialog
+
+        GameDataManagerDialog(self).exec()
+
+    def _delete_game_from_library_for_record(self, game: GameRecord) -> bool:
+        """Remove game from library. Returns True if deleted successfully."""
+        from app.services.game_delete_service import confirm_delete_game, delete_game_from_library
+
+        decision = confirm_delete_game(
+            self, self.db, game.name, install_dir=game.root_dir
+        )
+        if decision is None:
+            return False
+        try:
+            name = delete_game_from_library(
+                self.db,
+                game.id,
+                delete_install_folder=decision.delete_install_folder,
+            )
+        except (ValueError, OSError) as exc:
+            QMessageBox.warning(self, "删除失败", str(exc))
+            self.refresh_games()
+            return False
+        self.refresh_games()
+        if decision.delete_install_folder:
+            self.status.setText(f"已删除库记录及安装目录：{name}")
+        else:
+            self.status.setText(f"已从库中删除：{name}")
+        return True

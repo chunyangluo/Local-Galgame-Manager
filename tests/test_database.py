@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from app.data.database import Database, GameRecord, VndbImportRow
+from app.services.path_utils import normalize_game_dir
 
 
 class TestDatabaseInit:
@@ -55,7 +56,7 @@ class TestGameCRUD:
         games = db.list_games(uid)
         assert len(games) == 1
         assert games[0].name == "TestGame"
-        assert games[0].root_dir == "/games/test"
+        assert games[0].root_dir == normalize_game_dir("/games/test")
         assert games[0].cover_path == "/cover.jpg"
 
     def test_upsert_update(self, db_with_user: tuple[Database, int]) -> None:
@@ -113,6 +114,15 @@ class TestGameCRUD:
         assert db.get_game_by_id(uid, -1) is None
         assert db.get_game_by_id(uid, "abc") is None
 
+    def test_delete_game(self, db_with_user: tuple[Database, int]) -> None:
+        db, uid = db_with_user
+        db.upsert_game("ToDelete", "/games/del", "/games/del/game.exe")
+        gid = db.list_games(uid)[0].id
+        assert db.delete_game(gid) is True
+        assert db.list_games(uid) == []
+        assert db.get_game_by_id(uid, gid) is None
+        assert db.delete_game(gid) is False
+        assert db.delete_game(99999) is False
 
     def test_list_all_game_dirs(self, db_with_user: tuple[Database, int]) -> None:
         db, uid = db_with_user
@@ -120,7 +130,7 @@ class TestGameCRUD:
         db.upsert_game("Game1", "/g1", "/g1/g.exe")
         db.upsert_game("Game2", "/g2", "/g2/g.exe")
         dirs = db.list_all_game_dirs()
-        assert dirs == {"/g1", "/g2"}
+        assert dirs == {normalize_game_dir("/g1"), normalize_game_dir("/g2")}
     def test_update_game_custom_cover(self, db_with_user: tuple[Database, int]) -> None:
         db, uid = db_with_user
         db.upsert_game("Game", "/g", "/g/g.exe", "/old_cover.jpg")
@@ -160,7 +170,7 @@ class TestGameCRUD:
         assert len(games) == 2
         # 找到 "/games/keep" 并设置 custom_name
         for game in games:
-            if game.root_dir == "/games/keep":
+            if normalize_game_dir(game.root_dir) == normalize_game_dir("/games/keep"):
                 db.update_game_identity(game.id, "MyCustomName", "/games/keep/g.exe")
                 break
         # 现在 delete_games_not_in_scan 应该只删除没有 custom_name 的那个
@@ -228,9 +238,9 @@ class TestBatchUpsert:
         assert count == 2
         games = db.list_games(uid)
         assert len(games) == 2
-        by_root = {g.root_dir: g for g in games}
-        assert by_root["/g1"].vndb_id == "v1"
-        assert by_root["/g2"].rating == 7.0
+        by_root = {normalize_game_dir(g.root_dir): g for g in games}
+        assert by_root[normalize_game_dir("/g1")].vndb_id == "v1"
+        assert by_root[normalize_game_dir("/g2")].rating == 7.0
 
     def test_upsert_games_batch_empty(self, db: Database) -> None:
         assert db.upsert_games_batch([]) == 0
@@ -323,6 +333,11 @@ class TestSettings:
         db.set_disabled_plugins(["plugin_a", "plugin_b"])
         result = db.get_disabled_plugins()
         assert set(result) == {"plugin_a", "plugin_b"}
+
+    def test_plugin_configs(self, db: Database) -> None:
+        assert db.get_plugin_configs() == {}
+        db.set_plugin_config("demo", {"key": "value"})
+        assert db.get_plugin_config("demo") == {"key": "value"}
 
     def test_auto_backup_before_launch(self, db: Database) -> None:
         assert db.get_auto_backup_before_launch() is False

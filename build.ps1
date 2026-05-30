@@ -1,3 +1,7 @@
+# Switch to the script's directory
+$scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
+Set-Location $scriptPath
+
 $RUN_KEY_PATH = "Software\Microsoft\Windows\CurrentVersion\Run"
 $RUN_VALUE_NAME = "LocalGalgameManager"
 $desktopPath = [Environment]::GetFolderPath("Desktop")
@@ -51,8 +55,8 @@ try {
     Write-Host "Desktop shortcut created/updated: $shortcutPath"
 }
 catch {
-    Write-Error "Build succeeded but failed to create desktop shortcut."
-    exit 1
+    Write-Host "Note: Build succeeded but failed to create desktop shortcut (may be permission issue)."
+    Write-Host "You can manually create a shortcut to: $exePath"
 }
 
 try {

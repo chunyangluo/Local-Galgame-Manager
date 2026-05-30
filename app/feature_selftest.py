@@ -10,10 +10,10 @@ from typing import Callable
 
 from PIL import Image
 
-from app.core.cover_manager import CoverManager
+from app.services.cover_manager import CoverManager
 from app.core.scanner import GameScanner
 from app.data.database import Database
-from app.logging_setup import setup_logging
+from app.services.logging_setup import setup_logging
 from app.plugins.manager import PluginManager
 from app.services.app_data_dir import get_app_data_dir
 from app.services.search_service import SearchService

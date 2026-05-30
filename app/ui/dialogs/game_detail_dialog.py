@@ -279,6 +279,14 @@ class GameDetailDialog(QDialog):
         self._btn_reload.clicked.connect(self.reload_from_db)
         btn_group4.addWidget(self._btn_reload)
 
+        self._btn_delete = QPushButton("🗑️ 从库中删除")
+        self._btn_delete.setProperty("btnRole", "danger")
+        self._btn_delete.setToolTip(
+            "移除库内记录；可在确认框中勾选是否同时删除安装文件夹"
+        )
+        self._btn_delete.clicked.connect(self._on_delete_from_library)
+        btn_group4.addWidget(self._btn_delete)
+
         btn_group4.addStretch(1)
         root.addLayout(btn_group4)
 
@@ -437,6 +445,12 @@ class GameDetailDialog(QDialog):
     def _copy_debug(self) -> None:
         QApplication.clipboard().setText(self._debug.toPlainText())
         self._main.status.setText("已复制调试信息到剪贴板")
+
+    def _on_delete_from_library(self) -> None:
+        if not self._game:
+            return
+        if self._main._delete_game_from_library_for_record(self._game):
+            self.accept()
 
     def _on_open_root(self) -> None:
         if not self._game:

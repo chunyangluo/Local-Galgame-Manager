@@ -19,14 +19,14 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from app.paths import (
+from app.services.paths import (
     default_twodfan_sqlite_path,
     existing_twodfan_sqlite_files,
     twodfan_crawler_dir,
     twodfan_crawler_readme,
 )
 from app.services.twodfan_hints import twodfan_db_stats
-from app.ui.game_detail_dialog import reveal_in_explorer
+from app.ui.dialogs.game_detail_dialog import reveal_in_explorer
 
 if TYPE_CHECKING:
     from app.ui.main_window import MainWindow

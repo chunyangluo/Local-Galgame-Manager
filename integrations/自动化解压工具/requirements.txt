@@ -1,0 +1,11 @@
+fastapi>=0.110.0
+uvicorn[standard]>=0.29.0
+watchdog>=4.0.0
+loguru>=0.7.0
+pydantic-settings>=2.2.0
+pyyaml>=6.0
+python-multipart>=0.0.9
+cryptography>=42.0.0
+rich>=13.0.0
+pyzipper>=0.3.6
+lz4>=4.0.0

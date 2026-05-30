@@ -62,7 +62,7 @@ class LaunchGameTask(QRunnable):
             else:
                 duration = self._launcher.launch(self._launch_exe, as_admin=self._as_admin)
 
-            # 游戏退出后，发送窗口标题信号
+            capture_thread.join(timeout=20.0)
             if captured_title:
                 self.signals.window_title_captured.emit(self._game_id, captured_title)
 

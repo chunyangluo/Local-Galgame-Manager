@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 
 from app.services.twodfan_crawler_service import TwodfanCrawlerService
 from app.services.twodfan_hints import twodfan_db_stats
-from app.paths import default_twodfan_sqlite_path
+from app.services.paths import default_twodfan_sqlite_path
 import sys
 from pathlib import Path
 

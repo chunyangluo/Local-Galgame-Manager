@@ -1,62 +1,152 @@
-# 插件系统说明
+# 插件系统说明（API v1）
 
-项目已支持扫描结果插件化扩展。
+插件用于在不修改主程序的前提下扩展扫描、过滤与启动等行为。GUI 扫描、CLI 扫描与启动流程均会调用已启用插件。
 
-## 插件目录
+## 目录结构
 
-- 外部插件目录：`data/plugins/`
-- 文件命名：任意 `*.py`（以下划线开头的文件会被忽略）
+| 位置 | 用途 |
+|------|------|
+| `app/plugins/builtin/` | 内置插件（随程序发布） |
+| `app/plugins/examples/` | 示例插件（首次加载时复制到用户 `data/plugins/`，若不存在） |
+| `<数据目录>/plugins/` | 用户外部插件（单文件 `.py` 或插件包文件夹） |
 
-## 插件接口
+用户数据目录一般为：`%LOCALAPPDATA%\LocalGalgameManager\data\plugins\`
 
-每个插件文件需要提供 `register()` 函数，返回一个插件实例。
+## 插件包（推荐）
 
-插件实例必须包含：
+```
+plugins/
+  my_plugin/
+    plugin.json
+    plugin.py
+```
 
-- `name: str`
-- `transform_scan_results(root, results, context) -> list`
+`plugin.json` 示例：
 
-其中 `results` 是扫描结果列表（每项包含 `game_name/game_dir/launch_exe`）。
+```json
+{
+  "name": "my_plugin",
+  "version": "1.0.0",
+  "description": "一句话说明",
+  "author": "你的名字",
+  "entry": "plugin.py",
+  "min_api_version": 1
+}
+```
 
-## 示例
+`plugin.py` 必须提供：
 
 ```python
-from __future__ import annotations
-
-from dataclasses import replace
-
-
-class PrefixNamePlugin:
-    name = "prefix_name"
-
-    def transform_scan_results(self, *, root, results, context):
-        output = []
-        for item in results:
-            output.append(replace(item, game_name=f"[本地] {item.game_name}"))
-        return output
-
-
 def register():
-    return PrefixNamePlugin()
+    return MyPlugin()  # 实例
 ```
+
+## 单文件插件（兼容旧版）
+
+```
+plugins/my_plugin.py
+```
+
+同样提供 `register()`；元数据可写在类属性 `name` / `version` / `description` 上。
+
+## 快速创建骨架
+
+```bash
+python scripts/scaffold_plugin.py my_plugin --description "我的插件"
+```
+
+然后在主程序 **插件管理** 中启用。
+
+## 推荐基类 `BasePlugin`
+
+继承 `app.plugins.base.BasePlugin`，只重写需要的钩子（其余有安全默认实现）。
+
+| 钩子 | 常量 | 说明 |
+|------|------|------|
+| `transform_scan_results` | `scan_transform` | 每个扫描根目录完成后，变换结果列表 |
+| `should_include_scan_result` | `scan_filter` | 对每条候选返回 `False` 可丢弃 |
+| `modify_launch` | `launch_modify` | 启动前调整 exe / LE / 管理员标志，或 `cancel=True` |
+| `on_load` / `on_unload` | `on_load` / `on_unload` | 插件加载/重载生命周期 |
+| `get_config_schema` | — | 预留：配置项说明（供未来 UI） |
+
+### 上下文 `PluginContext`
+
+- `data_dir` — 应用数据根目录  
+- `config_for(plugin_name)` — 读取该插件在数据库中的 JSON 配置（`settings.plugin_configs`）
+
+写入配置（程序内或自行调用数据库 API）：
+
+```python
+db.set_plugin_config("prefix_name", {"prefix": "[汉化]"})
+```
+
+## 示例：扫描改名
+
+见 `app/plugins/examples/prefix_name/`。
+
+## 示例：过滤 demo 目录
+
+见 `app/plugins/examples/skip_demo_folders/`（`should_include_scan_result`）。
+
+## 示例：启动钩子
+
+```python
+from app.plugins.base import BasePlugin, LaunchDecision, PluginContext
+
+class MyLaunchPlugin(BasePlugin):
+    name = "my_launch"
+
+    def modify_launch(self, *, game_id, game_name, launch_exe,
+                      locale_emulator, as_admin, context: PluginContext):
+        # 强制管理员启动
+        return LaunchDecision(
+            launch_exe=launch_exe,
+            locale_emulator=locale_emulator,
+            as_admin=True,
+        )
+```
+
+取消启动：
+
+```python
+return LaunchDecision(
+    launch_exe=launch_exe,
+    cancel=True,
+    cancel_reason="维护中，暂不允许启动",
+)
+```
+
+## 内置插件
+
+| 名称 | 说明 |
+|------|------|
+| `normalize_scan_result` | 去重、修剪字段、规范化 `game_dir` 路径 |
+
+## 启用 / 禁用 / 重载
+
+- 主界面 **「更多」→ 插件管理**（或工具栏入口）
+- 勾选启用；配置写入 `plugin_disabled_names`
+- **重新加载** — 从磁盘重新扫描插件目录（无需重启程序）
+- **打开插件目录** — 直接编辑外部插件
+
+## API 版本
+
+- 当前程序：`PLUGIN_API_VERSION = 1`
+- 插件可声明 `api_version`；`plugin.json` 可写 `min_api_version`
+- 版本不兼容时插件加载失败并在列表中显示错误
+
+## 安全提示
+
+⚠️ 外部 `.py` 插件与主进程**同一 Python 解释器、同一权限**，可访问本机文件与网络。请仅安装可信来源的插件。
+
+## 与 Locale Emulator 的区别
+
+**LE 转区** 是独立 Windows 工具，在「更多 → Locale Emulator (LE)…」中配置 `LEProc.exe`，**不是** `plugins/` 下的 Python 插件。启动类插件钩子发生在调用 LE/普通启动之前，可与 LE 组合使用。
 
 ## 生效范围
 
-- GUI 扫描：生效
-- CLI 扫描：生效
-
-## 启用/禁用插件
-
-- 在主界面顶部点击 `插件管理`
-- 勾选表示启用，取消勾选表示禁用
-- 配置会持久化保存到本地数据库，重启后仍生效
-
-## Locale Emulator（LE）转区启动（非 Python 扫描插件）
-
-与上述 `data/plugins/*.py` 扫描插件不同，**Locale Emulator** 是独立安装的 Windows 工具，用于以日文区域等环境启动游戏。
-
-- 从 [Locale Emulator Releases](https://github.com/xupefei/Locale-Emulator/releases) 下载并安装（上游仓库已归档，发行版仍可用）。
-- 在本程序 **「更多 → Locale Emulator (LE)…」** 中选择安装目录下的 **`LEProc.exe`** 并保存。
-- 配置完成后，游戏列表右键菜单、游戏详情、游玩历史窗口中会出现 **LE 转区启动**（或 **LE** 按钮）。
-- 启动方式：本程序调用 `LEProc.exe <游戏 exe 绝对路径>`，由 LE 按自身规则选择配置文件（与官方命令行一致）。
-
+| 流程 | 扫描变换 | 扫描过滤 | 启动修改 |
+|------|----------|----------|----------|
+| GUI 全量/增量扫描 | ✓ | ✓ | — |
+| CLI `python -m app.cli` | ✓ | ✓ | — |
+| 游戏启动 | — | — | ✓ |

@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -192,6 +193,7 @@ class _CardSlot(QFrame):
     def __init__(self, game_id: int, card: GameCardWidget, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._game_id = game_id
+        self._card = card
         self.setObjectName("gameCardSlot")
         self._glow_on = False
         lay = QVBoxLayout(self)
@@ -230,6 +232,20 @@ class _CardSlot(QFrame):
             painter.setBrush(Qt.NoBrush)
             painter.drawRoundedRect(5, 5, w - 10, h - 10, 8, 8)
             painter.end()
+
+    def enterEvent(self, event) -> None:
+        if not self._glow_on and not self._flash_timer.isActive():
+            self._shadow.setBlurRadius(24)
+            self._shadow.setOffset(0, 4)
+            self._shadow.setColor(QColor(20, 110, 220, 150))
+        super().enterEvent(event)
+
+    def leaveEvent(self, event) -> None:
+        if not self._glow_on and not self._flash_timer.isActive():
+            self._shadow.setBlurRadius(0)
+            self._shadow.setOffset(0, 0)
+            self._shadow.setColor(QColor(255, 215, 0, 0))
+        super().leaveEvent(event)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() == Qt.LeftButton:
@@ -307,7 +323,9 @@ class PagedGameGridView(QWidget):
         self._slots: list[_CardSlot] = []
         self._selected_id: int | None = None
         self._cover_retry_failed: set[int] = set()
+        self._cover_retry_pending: set[int] = set()
         self._on_retry_cover: Callable[[int], None] = lambda _gid: None
+        self._on_add_cover: Callable[[int], None] = lambda _gid: None
         self._scroll_mode = PagedGameGridView.ScrollMode.SNAP_TO_PAGE
 
         self._page_starts: list[int] = []
@@ -365,10 +383,25 @@ class PagedGameGridView(QWidget):
         self._scroll_mode_btn.clicked.connect(self._toggle_scroll_mode)
         nav.addWidget(self._scroll_mode_btn)
         
-        self._page_label = QLabel("")
-        self._page_label.setObjectName("gridPageLabel")
-        nav.addWidget(self._page_label)
-        
+        self._page_summary = QLabel("")
+        self._page_summary.setObjectName("gridPageLabel")
+        nav.addWidget(self._page_summary)
+
+        self._page_jump = QSpinBox()
+        self._page_jump.setMinimum(1)
+        self._page_jump.setMaximum(1)
+        self._page_jump.setPrefix("第 ")
+        self._page_jump.setSuffix(" 页")
+        self._page_jump.setToolTip("输入页码后回车跳转")
+        self._page_jump.setKeyboardTracking(False)
+        self._page_jump.valueChanged.connect(self._jump_to_page)
+        nav.addWidget(self._page_jump)
+
+        self._btn_go_page = QPushButton("跳转")
+        self._btn_go_page.setToolTip("跳转到指定页")
+        self._btn_go_page.clicked.connect(self._jump_to_page_from_button)
+        nav.addWidget(self._btn_go_page)
+
         root.addLayout(nav)
 
     @property
@@ -409,23 +442,34 @@ class PagedGameGridView(QWidget):
     def set_focus_chain(self) -> None:
         self._scroll.setFocus()
 
+    def card_for_game_id(self, game_id: int) -> GameCardWidget | None:
+        for slot in self._slots:
+            if slot._game_id == game_id:
+                return slot._card
+        return None
+
     def set_games(
         self,
         games: list[GameRecord],
         *,
         cover_retry_failed: set[int],
+        cover_retry_pending: set[int] | None = None,
         on_retry_cover: Callable[[int], None],
+        on_add_cover: Callable[[int], None] | None = None,
     ) -> None:
         self._games = list(games)
         self._cover_retry_failed = set(cover_retry_failed)
+        self._cover_retry_pending = set(cover_retry_pending or ())
         self._on_retry_cover = on_retry_cover
+        self._on_add_cover = on_add_cover or (lambda _gid: None)
         self._selected_id = None
         self._scroll.verticalScrollBar().setValue(0)
         if not self._games:
             self._clear_content()
             self._page_starts = []
             self._page_heights = []
-            self._page_label.setText("")
+            self._page_summary.setText("")
+            self._page_jump.setMaximum(1)
             self._btn_prev.setEnabled(False)
             self._btn_next.setEnabled(False)
             self.selection_changed.emit()
@@ -486,7 +530,10 @@ class PagedGameGridView(QWidget):
                 card.setFixedSize(self._current_card_w, card_h)
                 if game.id in self._cover_retry_failed:
                     card.force_no_cover_placeholder()
+                elif game.id in self._cover_retry_pending:
+                    card.set_cover_loading(True)
                 card.retry_cover_requested.connect(self._on_retry_cover)
+                card.cover_add_requested.connect(self._on_add_cover)
                 slot = _CardSlot(game.id, card, page)
                 slot.setFixedSize(self._current_card_w, card_h)
                 slot.clicked.connect(self._on_slot_clicked)
@@ -590,16 +637,35 @@ class PagedGameGridView(QWidget):
 
     def _update_page_label_only(self) -> None:
         if not self._games or not self._page_starts:
-            self._page_label.setText("")
+            self._page_summary.setText("")
+            self._page_jump.blockSignals(True)
+            self._page_jump.setMaximum(1)
+            self._page_jump.setValue(1)
+            self._page_jump.blockSignals(False)
             return
         bar = self._scroll.verticalScrollBar()
         cur = self._page_index_for_value(bar.value()) + 1
         total = len(self._page_starts)
         cur = max(1, min(cur, total))
-        spp = self._slots_per_page()
-        self._page_label.setText(
-            f"第 {cur} / {total} 页 · 每页最多 {spp} 个（{ROWS_PER_PAGE} 行 × {self._cols} 列）"
-        )
+        n_games = len(self._games)
+        self._page_summary.setText(f"共 {n_games} 款 · 第 {cur} / {total} 页")
+        self._page_jump.blockSignals(True)
+        self._page_jump.setMaximum(max(1, total))
+        self._page_jump.setValue(cur)
+        self._page_jump.blockSignals(False)
+
+    def _jump_to_page(self, page: int) -> None:
+        if not self._page_starts:
+            return
+        total = len(self._page_starts)
+        idx = max(1, min(page, total)) - 1
+        self._scroll.verticalScrollBar().setValue(self._page_starts[idx])
+        if self._scroll_mode == PagedGameGridView.ScrollMode.SNAP_TO_PAGE:
+            self._snap_scroll_to_page()
+        self._update_nav_state()
+
+    def _jump_to_page_from_button(self) -> None:
+        self._jump_to_page(self._page_jump.value())
 
     def _update_nav_state(self) -> None:
         self._update_page_label_only()

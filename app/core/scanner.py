@@ -130,10 +130,12 @@ class GameScanner:
                 if candidate is None:
                     no_exe_dirs.append(str(directory))
                     continue
+                from app.services.path_utils import normalize_game_dir
+
                 results.append(
                     ScanResult(
                         game_name=self._resolve_game_name(directory),
-                        game_dir=str(directory),
+                        game_dir=normalize_game_dir(directory),
                         launch_exe=str(candidate),
                     )
                 )
@@ -274,6 +276,9 @@ class GameScanner:
                     score += 2
                 if "x64" in lower or "64" in lower:
                     score += 1
+                # 中文版优先级：包含中文标识的exe优先选择
+                if any(k in lower for k in ("_zh", "_cn", "_chs", "_chinese", "_中文")):
+                    score += 3
                 if any(k in lower for k in SOFT_PENALTY_KEYWORDS):
                     score -= 3
                 

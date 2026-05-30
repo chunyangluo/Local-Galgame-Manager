@@ -1,0 +1,8 @@
+{
+  "name": "prefix_name",
+  "version": "1.0.0",
+  "description": "为扫描到的游戏名添加 [本地] 前缀（示例插件）",
+  "author": "Local Galgame Manager",
+  "entry": "plugin.py",
+  "min_api_version": 1
+}

@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
 )
 
-from app.paths import (
+from app.services.paths import (
     default_twodfan_sqlite_path,
     existing_twodfan_sqlite_files,
     twodfan_crawler_dir,
@@ -44,7 +44,7 @@ from app.services.save_archive_service import (
     zip_directory_with_progress,
 )
 from app.services.save_path_resolver import resolve_save_path_candidates
-from app.ui.game_detail_dialog import reveal_in_explorer
+from app.ui.dialogs.game_detail_dialog import reveal_in_explorer
 
 if TYPE_CHECKING:
     from app.ui.main_window import MainWindow
@@ -398,7 +398,7 @@ class SaveManagerWindow(QDialog):
         self._twodfan_stats.setText(f"状态：已就绪 — 下载页 {np} 条，存档线索 {nh} 条。")
 
     def _open_twodfan_library_dialog(self) -> None:
-        from app.ui.twodfan_library_dialog import TwodfanLibraryDialog
+        from app.ui.dialogs.twodfan_library_dialog import TwodfanLibraryDialog
 
         dlg = TwodfanLibraryDialog(self._main)
         dlg.exec()

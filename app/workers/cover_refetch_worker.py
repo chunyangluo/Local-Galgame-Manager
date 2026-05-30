@@ -4,7 +4,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QRunnable, Signal
 
-from app.core.cover_manager import CoverManager
+from app.services.cover_manager import CoverManager
 
 
 class CoverRefetchSignals(QObject):

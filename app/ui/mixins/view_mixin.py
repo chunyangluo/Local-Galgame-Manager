@@ -17,10 +17,13 @@ class ViewMixin:
     _highlight_timer: QTimer
     _highlight_phase: bool
     _cover_retry_failed: set[int]
+    _cover_retry_pending: set[int]
     games_cache: list[GameRecord]
     filtered_games: list[GameRecord]
     search_input: object
     favorite_only: object
+    filter_combo: object
+    sort_combo: object
     search_service: object
     status: object
     empty_hint: object
@@ -31,10 +34,17 @@ class ViewMixin:
     _library_stack: object
 
     def _apply_filters(self) -> None:
+        play_state = ""
+        sort_by = "default"
+        if hasattr(self, "filter_combo") and self.filter_combo is not None:
+            play_state = self.filter_combo.currentData() or ""
+        if hasattr(self, "sort_combo") and self.sort_combo is not None:
+            sort_by = self.sort_combo.currentData() or "default"
         self.filtered_games = self.search_service.filter_games(
             self.games_cache,
             query=self.search_input.text(),
-            only_favorite=self.favorite_only.isChecked(),
+            play_state=play_state,
+            sort_by=sort_by,
         )
         self._refresh_library_view()
         self._update_empty_state()
@@ -49,7 +59,9 @@ class ViewMixin:
             self._game_paged_grid.set_games(
                 self.filtered_games,
                 cover_retry_failed=self._cover_retry_failed,
+                cover_retry_pending=self._cover_retry_pending,
                 on_retry_cover=lambda gid: self._request_cover_refetch(gid, user_triggered=False),
+                on_add_cover=lambda gid: self.set_custom_cover_for_game_id(gid),
             )
             n = len(self.filtered_games)
             self.status.setText(f"共 {n} / {len(self.games_cache)} 个游戏")
@@ -83,8 +95,13 @@ class ViewMixin:
             card = GameCardWidget(game)
             if game.id in self._cover_retry_failed:
                 card.force_no_cover_placeholder()
+            elif game.id in self._cover_retry_pending:
+                card.set_cover_loading(True)
             card.retry_cover_requested.connect(
                 lambda gid, self=self: self._request_cover_refetch(gid, user_triggered=False)
+            )
+            card.cover_add_requested.connect(
+                lambda gid, self=self: self.set_custom_cover_for_game_id(gid)
             )
             self.games_list.setItemWidget(item, card)
         self._render_index = end

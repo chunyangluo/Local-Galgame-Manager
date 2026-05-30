@@ -17,3 +17,9 @@ data/
 data/backups/
 data/covers/
 *.log
+.dbg/
+*.egg-info/
+.trae/
+integrations/**/output/
+integrations/**/extract_report/
+integrations/**/__pycache__/

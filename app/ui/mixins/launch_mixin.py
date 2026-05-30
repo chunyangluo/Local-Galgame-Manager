@@ -17,7 +17,8 @@ class LaunchMixin:
     current_user_id: int
     auto_backup_before_launch: bool
     status: object
-    _launching_game_ids: set[int] = set()
+    plugin_manager: object
+    _launching_game_ids: set[int]
 
     def is_locale_emulator_usable(self) -> bool:
         if sys.platform != "win32":
@@ -89,6 +90,20 @@ class LaunchMixin:
                 last_mode = self.db.get_last_launch_mode()
                 use_le = (last_mode == "le")
         
+        launch_decision = self.plugin_manager.modify_launch(
+            game_id=game.id,
+            game_name=game.name,
+            launch_exe=game.launch_exe,
+            locale_emulator=use_le,
+            as_admin=as_admin,
+        )
+        if launch_decision.cancel:
+            reason = launch_decision.cancel_reason.strip() or "插件已取消启动"
+            QMessageBox.information(parent, "启动已取消", reason)
+            return
+        use_le = launch_decision.locale_emulator
+        as_admin = launch_decision.as_admin
+        launch_exe = launch_decision.launch_exe
         if use_le:
             if not self.is_locale_emulator_usable():
                 r = QMessageBox.question(
@@ -119,11 +134,11 @@ class LaunchMixin:
             game_id,
             use_le,
             as_admin,
-            game.launch_exe,
+            launch_exe,
         )
         task = LaunchGameTask(
             self.launcher,
-            launch_exe=game.launch_exe,
+            launch_exe=launch_exe,
             locale_emulator=use_le,
             le_proc_path=le_path,
             as_admin=as_admin,

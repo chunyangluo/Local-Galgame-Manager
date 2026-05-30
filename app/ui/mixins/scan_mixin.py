@@ -11,6 +11,7 @@ class ScanMixin:
     _scan_thread: QThread | None
     _scan_worker: ScanWorker | None
     _is_incremental_scan: bool = False
+    _skip_scan_message: bool = False
     db: object
     scanner: object
     plugin_manager: object
@@ -49,6 +50,11 @@ class ScanMixin:
                 self.status.setText("扫描目录已清空，保留了含自定义数据的游戏记录")
             return
         self.status.setText(f"当前扫描目录数量: {roots_count}")
+
+    def _scan_and_vndb_import(self) -> None:
+        """扫描目录并自动执行VNDB导入（跳过扫描完成消息框）"""
+        self._skip_scan_message = True
+        self._scan_all()
 
     def _scan_all(self) -> None:
         if self._scan_running:
@@ -104,9 +110,10 @@ class ScanMixin:
             return
         percent = int((current_root / total_roots) * 100)
         self.scan_progress.setValue(percent)
-        self.status.setText(
-            f"扫描进度 {current_root}/{total_roots}，已识别 {imported} 个游戏 | 当前目录: {root}"
-        )
+        status_text = f"扫描进度 {current_root}/{total_roots}，已识别 {imported} 个游戏 | 当前目录: {root}"
+        self.status.setText(status_text)
+        from app.services.log_service import LogService
+        LogService.get_instance().progress("扫描", current_root, total_roots)
 
     def _on_scan_finished(
         self,
@@ -118,19 +125,21 @@ class ScanMixin:
         if error == "__CANCELLED__":
             self._scan_running = False
             self._is_incremental_scan = False
+            self._skip_scan_message = False
             self._end_scan_ui()
             self.status.setText(f"扫描已取消，已识别 {imported} 个游戏")
             return
         if error:
             self._scan_running = False
             self._is_incremental_scan = False
+            self._skip_scan_message = False
             self._end_scan_ui()
             QMessageBox.critical(self, "扫描失败", error)
             self.status.setText("扫描失败，请检查目录权限或文件状态")
             return
         
-        # 显示扫描结果弹窗
-        if rows:
+        # 显示扫描结果弹窗（除非跳过）
+        if rows and not self._skip_scan_message:
             msg = f"扫描完成！\n\n"
             msg += f"扫描目录数: {len(roots)}\n"
             msg += f"识别到游戏: {len(rows)} 个"
@@ -139,13 +148,18 @@ class ScanMixin:
         if not rows:
             self._scan_running = False
             self._is_incremental_scan = False
+            self._skip_scan_message = False
             self._end_scan_ui()
             self.refresh_games()
             self.status.setText("扫描完成，但未识别到可导入游戏（已保留原有库数据）")
             return
         if self._is_incremental_scan:
+            from app.services.path_utils import normalize_game_dir
+
             existing_dirs = self.db.list_all_game_dirs()
-            new_rows = [row for row in rows if row[1] not in existing_dirs]
+            new_rows = [
+                row for row in rows if normalize_game_dir(row[1]) not in existing_dirs
+            ]
             skipped_count = len(rows) - len(new_rows)
             if skipped_count > 0:
                 self.status.setText(f"增量扫描：已跳过 {skipped_count} 个已有游戏")
@@ -153,11 +167,13 @@ class ScanMixin:
             self._is_incremental_scan = False
         if not rows:
             self._scan_running = False
+            self._skip_scan_message = False
             self._end_scan_ui()
             self.refresh_games()
             self.status.setText("增量扫描完成，没有发现新游戏（已保留原有库数据）")
             return
         valid_dirs = {row[1] for row in rows}
+        self._skip_scan_message = False
         self.status.setText(f"扫描完成，开始 VNDB 导入（共 {len(rows)} 项）...")
         self._start_vndb_batch_import(
             targets=rows,

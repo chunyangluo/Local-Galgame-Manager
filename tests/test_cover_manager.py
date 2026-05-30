@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from PIL import Image
 
-from app.core.cover_manager import (
+from app.services.cover_manager import (
     CoverManager,
     read_image_size_fast,
     _read_jpeg_size,

@@ -6,10 +6,10 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from app.core.cover_manager import CoverManager
+from app.services.cover_manager import CoverManager
 from app.core.scanner import GameScanner
 from app.data.database import Database, VndbImportRow
-from app.logging_setup import setup_logging
+from app.services.logging_setup import setup_logging
 from app.plugins.manager import PluginManager
 from app.services.app_data_dir import get_app_data_dir
 from app.services.vndb_service import VndbOutcome, VndbService
@@ -65,6 +65,7 @@ def run() -> int:
     cover_manager = CoverManager(data_dir / "covers")
     vndb_service = VndbService()
     plugin_manager = PluginManager(data_dir)
+    plugin_manager.set_plugin_configs(db.get_plugin_configs())
     plugin_manager.load_all()
 
     all_results: list[dict[str, str]] = []

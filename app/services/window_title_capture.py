@@ -18,16 +18,22 @@ log = logging.getLogger(__name__)
 user32 = ctypes.windll.user32  # type: ignore[attr-defined]
 kernel32 = ctypes.windll.kernel32  # type: ignore[attr-defined]
 
-# 无效窗口标题黑名单（通用词，无法用于识别游戏）
+# 无效窗口标题黑名单（通用词、错误提示词，无法用于识别游戏）
 _INVALID_TITLES = frozenset({
     "game", "launcher", "start", "menu", "window", "application",
     "program", "default", "untitled", "无标题", "启动程序",
     "游戏", "主程序", "开始",
+    # 错误对话框相关
+    "error", "错误", "exception", "exception handler",
+    "runtime", "visual c++", "visual studio",
+    "install", "setup", "component", "required",
+    "crash", "fatal", "warning", "alert",
+    "dialog", "message", "prompt", "confirm",
 })
 
 
 def is_valid_window_title(title: str) -> bool:
-    """校验窗口标题是否有效（非通用词、非空、长度合理）。"""
+    """校验窗口标题是否有效（非通用词、非空、长度合理、非错误提示）。"""
     if not title or not title.strip():
         return False
     stripped = title.strip()
@@ -35,6 +41,11 @@ def is_valid_window_title(title: str) -> bool:
         return False
     if stripped.lower() in _INVALID_TITLES:
         return False
+    # 检查标题中是否包含黑名单词汇（不仅仅是完全匹配）
+    lower_title = stripped.lower()
+    for invalid_word in _INVALID_TITLES:
+        if invalid_word in lower_title:
+            return False
     return True
 
 

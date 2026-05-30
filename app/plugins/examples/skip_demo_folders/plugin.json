@@ -1,0 +1,7 @@
+{
+  "name": "skip_demo_folders",
+  "version": "1.0.0",
+  "description": "扫描时跳过目录名包含 demo/sample 的候选（示例）",
+  "entry": "plugin.py",
+  "min_api_version": 1
+}

@@ -75,6 +75,33 @@ class SettingsDialog(QDialog):
         launch_layout.addRow("", self._auto_backup_check)
         
         scroll_layout.addWidget(launch_group)
+
+        # ========== 扩展工具 ==========
+        tools_group = QGroupBox("扩展工具")
+        tools_layout = QVBoxLayout(tools_group)
+        tools_hint = QLabel(
+            "独立工具模块，从右上角「⚙ 更多」或本页按钮进入（HBE 解密、自动化解压等）。"
+        )
+        tools_hint.setWordWrap(True)
+        tools_hint.setStyleSheet("color: #93A1B6; font-size: 11px;")
+        tools_layout.addWidget(tools_hint)
+        row_tools = QHBoxLayout()
+        self._btn_hbe = QPushButton("HBE 解密工具…")
+        self._btn_hbe.setToolTip("解密 Hexo Blog Encrypt 加密 HTML")
+        self._btn_hbe.clicked.connect(self._open_hbe_decrypt)
+        row_tools.addWidget(self._btn_hbe)
+        self._btn_auto_extract = QPushButton("自动化解压…")
+        self._btn_auto_extract.setToolTip("压缩包解压、目录扫描与整理到游戏库")
+        self._btn_auto_extract.clicked.connect(self._open_auto_extract)
+        row_tools.addWidget(self._btn_auto_extract)
+        self._btn_data_mgr = QPushButton("数据管理…")
+        self._btn_data_mgr.clicked.connect(self._open_data_manager)
+        row_tools.addWidget(self._btn_data_mgr)
+        self._btn_plugins = QPushButton("插件管理…")
+        self._btn_plugins.clicked.connect(self._open_plugins)
+        row_tools.addWidget(self._btn_plugins)
+        tools_layout.addLayout(row_tools)
+        scroll_layout.addWidget(tools_group)
         
         # ========== 封面设置 ==========
         cover_group = QGroupBox("封面设置")
@@ -261,6 +288,38 @@ class SettingsDialog(QDialog):
             self._db.set_twodfan_hints_db_path(path)
             self.settings_changed.emit()
     
+    def _main_window(self):
+        w = self.parent()
+        while w is not None:
+            if hasattr(w, "_open_hbe_decrypt_dialog"):
+                return w
+            w = w.parent()
+        return None
+
+    def _open_hbe_decrypt(self) -> None:
+        main = self._main_window()
+        if main is not None:
+            main._open_hbe_decrypt_dialog()
+        else:
+            QMessageBox.information(self, "提示", "请从主窗口打开 HBE 解密工具。")
+
+    def _open_auto_extract(self) -> None:
+        main = self._main_window()
+        if main is not None:
+            main._open_auto_extract_dialog()
+        else:
+            QMessageBox.information(self, "提示", "请从主窗口打开自动化解压工具。")
+
+    def _open_data_manager(self) -> None:
+        main = self._main_window()
+        if main is not None:
+            main._open_game_data_manager()
+
+    def _open_plugins(self) -> None:
+        main = self._main_window()
+        if main is not None:
+            main._open_plugin_settings()
+
     def _open_theme_settings(self) -> None:
         """打开主题设置对话框"""
         from app.ui.dialogs import ThemeSettingsDialog

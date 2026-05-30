@@ -101,6 +101,19 @@ class Database:
         self.conn.row_factory = sqlite3.Row
         self._create_tables()
 
+    def close(self) -> None:
+        """Close the SQLite connection (e.g. before replacing the DB file on disk)."""
+        if self.conn is not None:
+            self.conn.close()
+            self.conn = None  # type: ignore[assignment]
+
+    def reopen(self) -> None:
+        """Re-open the database after the file on disk was replaced."""
+        if self.conn is not None:
+            return
+        self.conn = sqlite3.connect(self.db_path)
+        self.conn.row_factory = sqlite3.Row
+
     def _create_tables(self) -> None:
         self.conn.executescript(
             """
@@ -323,6 +336,48 @@ class Database:
             self.conn.execute(
                 "ALTER TABLE settings ADD COLUMN last_launch_mode TEXT DEFAULT ''"
             )
+        if "plugin_configs" not in cols:
+            self.conn.execute(
+                "ALTER TABLE settings ADD COLUMN plugin_configs TEXT DEFAULT '{}'"
+            )
+        if "search_history" not in cols:
+            self.conn.execute(
+                "ALTER TABLE settings ADD COLUMN search_history TEXT DEFAULT '[]'"
+            )
+
+    def get_plugin_configs(self) -> dict[str, dict]:
+        row = self.conn.execute(
+            "SELECT plugin_configs FROM settings WHERE id = 1"
+        ).fetchone()
+        if row is None or row["plugin_configs"] is None:
+            return {}
+        try:
+            value = json.loads(str(row["plugin_configs"]))
+        except json.JSONDecodeError:
+            return {}
+        if not isinstance(value, dict):
+            return {}
+        out: dict[str, dict] = {}
+        for key, val in value.items():
+            if isinstance(val, dict):
+                out[str(key)] = dict(val)
+        return out
+
+    def set_plugin_configs(self, configs: dict[str, dict]) -> None:
+        payload = json.dumps(configs, ensure_ascii=False)
+        self.conn.execute(
+            "UPDATE settings SET plugin_configs = ?, updated_at = ? WHERE id = 1",
+            (payload, datetime.utcnow().isoformat()),
+        )
+        self.conn.commit()
+
+    def get_plugin_config(self, plugin_name: str) -> dict:
+        return dict(self.get_plugin_configs().get(plugin_name) or {})
+
+    def set_plugin_config(self, plugin_name: str, config: dict) -> None:
+        all_cfg = self.get_plugin_configs()
+        all_cfg[plugin_name] = dict(config)
+        self.set_plugin_configs(all_cfg)
 
     def ensure_default_user(self) -> int:
         row = self.conn.execute("SELECT current_user_id FROM settings WHERE id = 1").fetchone()
@@ -522,6 +577,41 @@ class Database:
         )
         self.conn.commit()
 
+    def get_search_history(self) -> list[str]:
+        row = self.conn.execute(
+            "SELECT search_history FROM settings WHERE id = 1"
+        ).fetchone()
+        if row is None or row["search_history"] is None:
+            return []
+        try:
+            value = json.loads(str(row["search_history"]))
+        except (json.JSONDecodeError, TypeError):
+            return []
+        if not isinstance(value, list):
+            return []
+        return [str(item) for item in value if str(item).strip()]
+
+    def add_search_history(self, term: str, *, limit: int = 15) -> list[str]:
+        normalized = term.strip()
+        if not normalized:
+            return self.get_search_history()
+        history = [h for h in self.get_search_history() if h.lower() != normalized.lower()]
+        history.insert(0, normalized)
+        history = history[:limit]
+        self.conn.execute(
+            "UPDATE settings SET search_history = ?, updated_at = ? WHERE id = 1",
+            (json.dumps(history, ensure_ascii=False), datetime.utcnow().isoformat()),
+        )
+        self.conn.commit()
+        return history
+
+    def clear_search_history(self) -> None:
+        self.conn.execute(
+            "UPDATE settings SET search_history = '[]', updated_at = ? WHERE id = 1",
+            (datetime.utcnow().isoformat(),),
+        )
+        self.conn.commit()
+
     def add_scan_root(self, path: str) -> None:
         self.conn.execute(
             "INSERT OR IGNORE INTO scan_roots (path, created_at) VALUES (?, ?)",
@@ -538,6 +628,9 @@ class Database:
         return [str(r["path"]) for r in rows]
 
     def upsert_game(self, name: str, root_dir: str, launch_exe: str, cover_path: str | None = None) -> None:
+        from app.services.path_utils import normalize_game_dir
+
+        root_dir = normalize_game_dir(root_dir)
         now = datetime.utcnow().isoformat()
         self.conn.execute(
             """
@@ -560,11 +653,13 @@ class Database:
         """
         if not rows:
             return 0
+        from app.services.path_utils import normalize_game_dir
+
         now = datetime.utcnow().isoformat()
         payload = [
             (
                 row.name,
-                row.root_dir,
+                normalize_game_dir(row.root_dir),
                 row.launch_exe,
                 row.cover_path,
                 row.vndb_id,
@@ -613,11 +708,20 @@ class Database:
         return len(payload)
 
     def find_game_by_root(self, root_dir: str) -> GameRecord | None:
+        from app.services.path_utils import normalize_game_dir
+
+        root_dir = normalize_game_dir(root_dir)
         row = self.conn.execute(
             """
             SELECT
                 g.id,
-                COALESCE(NULLIF(g.custom_name, ''), NULLIF(g.window_title, ''), g.name) AS name,
+                COALESCE(
+                    NULLIF(g.custom_name, ''),
+                    NULLIF(g.window_title, ''),
+                    NULLIF(g.title_localized, ''),
+                    NULLIF(g.title_original, ''),
+                    g.name
+                ) AS name,
                 g.root_dir,
                 COALESCE(NULLIF(g.custom_launch_exe, ''), g.launch_exe) AS launch_exe,
                 COALESCE(NULLIF(g.custom_cover_path, ''), g.cover_path) AS cover_path,
@@ -711,7 +815,13 @@ class Database:
             """
             SELECT
                 g.id,
-                COALESCE(NULLIF(g.custom_name, ''), NULLIF(g.window_title, ''), g.name) AS name,
+                COALESCE(
+                    NULLIF(g.custom_name, ''),
+                    NULLIF(g.window_title, ''),
+                    NULLIF(g.title_localized, ''),
+                    NULLIF(g.title_original, ''),
+                    g.name
+                ) AS name,
                 g.root_dir,
                 COALESCE(NULLIF(g.custom_launch_exe, ''), g.launch_exe) AS launch_exe,
                 COALESCE(NULLIF(g.custom_cover_path, ''), g.cover_path) AS cover_path,
@@ -774,9 +884,12 @@ class Database:
         """Return all game root directories in the database.
 
         Used for incremental scan to skip already-imported games.
+        Paths are normalized so ``E:\\foo`` and ``E:/foo`` compare equal.
         """
-        rows = self.conn.execute('SELECT root_dir FROM games').fetchall()
-        return {str(r['root_dir']) for r in rows}
+        from app.services.path_utils import normalize_game_dir
+
+        rows = self.conn.execute("SELECT root_dir FROM games").fetchall()
+        return {normalize_game_dir(str(r["root_dir"])) for r in rows}
 
     def get_game_by_id(self, user_id: int, game_id: int) -> GameRecord | None:
         """Return one game with the same fields as list_games.
@@ -974,24 +1087,41 @@ class Database:
             ids.append(self.create_category(user_id, name))
         return ids
 
+    def delete_game(self, game_id: int) -> bool:
+        """Remove one game row; related rows cascade via foreign keys."""
+        row = self.conn.execute("SELECT id FROM games WHERE id = ?", (game_id,)).fetchone()
+        if row is None:
+            return False
+        self.conn.execute("DELETE FROM games WHERE id = ?", (game_id,))
+        self.conn.commit()
+        return True
+
     def delete_games_not_in_scan(self, roots: list[str], valid_game_dirs: set[str]) -> int:
         if not roots:
             return 0
-        where_clause = " OR ".join(["root_dir LIKE ?"] * len(roots))
-        params: list[str] = [f"{root}%" for root in roots]
+        from app.services.path_utils import is_path_under_root, normalize_game_dir
+
+        norm_valid = {normalize_game_dir(d) for d in valid_game_dirs}
         rows = self.conn.execute(
-            f"SELECT id, root_dir, custom_name, custom_launch_exe, custom_cover_path FROM games WHERE {where_clause}",
-            params,
+            "SELECT id, root_dir, custom_name, custom_launch_exe, custom_cover_path FROM games"
         ).fetchall()
         to_delete_ids = []
         for r in rows:
-            if str(r["root_dir"]) not in valid_game_dirs:
-                custom_name = str(r["custom_name"]).strip() if r["custom_name"] is not None else ""
-                custom_launch_exe = str(r["custom_launch_exe"]).strip() if r["custom_launch_exe"] is not None else ""
-                custom_cover_path = str(r["custom_cover_path"]).strip() if r["custom_cover_path"] is not None else ""
-                has_custom = custom_name or custom_launch_exe or custom_cover_path
-                if not has_custom:
-                    to_delete_ids.append(int(r["id"]))
+            root_dir = str(r["root_dir"])
+            if not any(is_path_under_root(root_dir, root) for root in roots):
+                continue
+            if normalize_game_dir(root_dir) in norm_valid:
+                continue
+            custom_name = str(r["custom_name"]).strip() if r["custom_name"] is not None else ""
+            custom_launch_exe = (
+                str(r["custom_launch_exe"]).strip() if r["custom_launch_exe"] is not None else ""
+            )
+            custom_cover_path = (
+                str(r["custom_cover_path"]).strip() if r["custom_cover_path"] is not None else ""
+            )
+            has_custom = custom_name or custom_launch_exe or custom_cover_path
+            if not has_custom:
+                to_delete_ids.append(int(r["id"]))
         if not to_delete_ids:
             return 0
         placeholders = ",".join(["?"] * len(to_delete_ids))
@@ -1048,6 +1178,24 @@ class Database:
         if row is None or row["window_title"] is None:
             return None
         return str(row["window_title"]).strip() or None
+
+    def get_window_titles_by_root_dirs(self, root_dirs: list[str]) -> dict[str, str]:
+        """批量获取多个目录对应的窗口标题（优化性能）"""
+        if not root_dirs:
+            return {}
+        placeholders = ",".join("?" * len(root_dirs))
+        rows = self.conn.execute(
+            f"SELECT root_dir, window_title FROM games WHERE root_dir IN ({placeholders})",
+            root_dirs,
+        ).fetchall()
+        result: dict[str, str] = {}
+        for row in rows:
+            wt = row["window_title"]
+            if wt:
+                wt = str(wt).strip()
+                if wt:
+                    result[str(row["root_dir"])] = wt
+        return result
 
     def list_save_backups(self, user_id: int, game_id: int) -> list[SaveBackupRecord]:
         rows = self.conn.execute(

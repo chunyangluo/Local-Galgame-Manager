@@ -16,7 +16,13 @@ class BackupService:
         timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
         bundle_dir = self.backup_dir / f"backup_{timestamp}"
         bundle_dir.mkdir(parents=True, exist_ok=True)
+        
         shutil.copy2(db_file, bundle_dir / db_file.name)
+        
+        covers_dir = self.data_dir / "covers"
+        if covers_dir.exists():
+            shutil.copytree(covers_dir, bundle_dir / "covers")
+        
         payload = {"created_at": datetime.utcnow().isoformat(), "extra": extra or {}}
         (bundle_dir / "meta.json").write_text(
             json.dumps(payload, ensure_ascii=False, indent=2),
@@ -37,4 +43,12 @@ class BackupService:
             shutil.rmtree(temp_dir, ignore_errors=True)
             raise FileNotFoundError("Backup does not include database file.")
         shutil.copy2(source_db, db_file)
+        
+        source_covers = temp_dir / "covers"
+        dest_covers = self.data_dir / "covers"
+        if source_covers.exists() and source_covers.is_dir():
+            if dest_covers.exists():
+                shutil.rmtree(dest_covers, ignore_errors=True)
+            shutil.copytree(source_covers, dest_covers)
+        
         shutil.rmtree(temp_dir, ignore_errors=True)

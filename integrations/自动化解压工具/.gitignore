@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+
+data/logs/
+data/temp/
+data/target/
+data/archive/
+data/failed/
+data/upload/
+
+extract_report/
+
+*.tmp
+*.bak

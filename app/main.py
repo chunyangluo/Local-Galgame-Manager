@@ -6,7 +6,7 @@ import sys
 from PySide6.QtWidgets import QApplication
 from PySide6.QtWidgets import QMessageBox
 
-from app.logging_setup import log_file_path, setup_logging
+from app.services.logging_setup import log_file_path, setup_logging
 from app.plugins.manager import PluginManager
 from app.services.app_data_dir import get_app_data_dir
 from app.ui.main_window import MainWindow

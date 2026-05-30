@@ -8,7 +8,10 @@ from PySide6.QtGui import QAction, QCloseEvent, QIcon, QCursor, QColor
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QCompleter,
     QDialog,
+    QFrame,
+    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -18,6 +21,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QStackedWidget,
+    QStyle,
     QSystemTrayIcon,
     QToolButton,
     QVBoxLayout,
@@ -26,14 +30,14 @@ from PySide6.QtWidgets import (
     QListWidget,
 )
 
-from app.core.cover_manager import CoverManager
+from app.services.cover_manager import CoverManager
 from app.core.launcher import GameLauncher
 from app.core.scanner import GameScanner
 from app.data.database import Database, GameRecord
 from app.ui.dialogs import ScanRootsDialog
-from app.ui.game_detail_dialog import GameDetailDialog
+from app.ui.dialogs.game_detail_dialog import GameDetailDialog
 from app.ui.paged_game_grid import PagedGameGridView
-from app.ui.play_history_window import PlayHistoryWindow
+from app.ui.dialogs.play_history_window import PlayHistoryWindow
 from app.ui.styles import MAIN_WINDOW_STYLESHEET
 from app.plugins.manager import PluginManager
 from app.services.backup_service import BackupService
@@ -76,6 +80,7 @@ class MainWindow(
         self.search_service = SearchService()
         self.plugin_manager = plugin_manager or PluginManager(data_dir)
         self._disabled_plugins = set(self.db.get_disabled_plugins())
+        self.plugin_manager.set_plugin_configs(self.db.get_plugin_configs())
         self.plugin_manager.load_all(disabled_plugins=self._disabled_plugins)
         self.cover_fetch_mode = self.db.get_cover_fetch_mode()
         self.cover_manager.cover_fetch_mode = self.cover_fetch_mode
@@ -102,12 +107,14 @@ class MainWindow(
         self._launch_pool = QThreadPool(self)
         self._launch_pool.setMaxThreadCount(1)
         self._cover_retry_pending: set[int] = set()
+        self._launching_game_ids: set[int] = set()
         self._cover_retry_failed: set[int] = set()
         self._cover_retry_startup_running = False
         self._cover_retry_startup_total = 0
         self._cover_retry_startup_done = 0
         self._cover_retry_startup_success = 0
         self._play_history_window: PlayHistoryWindow | None = None
+        self._toast_label: QLabel | None = None
 
         self._load_theme_preferences()
         self._build_ui()
@@ -121,204 +128,370 @@ class MainWindow(
     def _polish_toolbar_control(self, widget: QWidget) -> None:
         widget.setCursor(Qt.PointingHandCursor)
 
+    def _toolbar_stylesheet(self) -> str:
+        """Self-contained toolbar QSS (survives theme switches)."""
+        return """
+            QFrame#toolbarGroup {
+                background: rgba(127, 167, 217, 0.07);
+                border: 1px solid rgba(127, 167, 217, 0.18);
+                border-radius: 10px;
+            }
+            QLabel#toolbarGroupLabel {
+                color: #8B96AA;
+                font-size: 10px;
+                font-weight: 600;
+                padding-left: 2px;
+            }
+            QWidget#mainToolbar QPushButton,
+            QWidget#mainToolbar QToolButton {
+                border-radius: 8px;
+                padding: 6px 14px;
+                font-size: 13px;
+                font-weight: 600;
+            }
+            QWidget#mainToolbar QPushButton[btnKind="primary"],
+            QWidget#mainToolbar QToolButton[btnKind="primary"] {
+                color: #FFFFFF;
+                background: #3D7BE0;
+                border: 1px solid #4A88EE;
+            }
+            QWidget#mainToolbar QPushButton[btnKind="primary"]:hover,
+            QWidget#mainToolbar QToolButton[btnKind="primary"]:hover {
+                background: #4A88EE;
+            }
+            QWidget#mainToolbar QPushButton[btnKind="primary"]:pressed,
+            QWidget#mainToolbar QToolButton[btnKind="primary"]:pressed {
+                background: #3168C4;
+            }
+            QWidget#mainToolbar QPushButton[btnKind="accent"],
+            QWidget#mainToolbar QToolButton[btnKind="accent"] {
+                color: #DCEBFF;
+                background: rgba(127, 167, 217, 0.16);
+                border: 1px solid rgba(127, 167, 217, 0.45);
+            }
+            QWidget#mainToolbar QPushButton[btnKind="accent"]:hover,
+            QWidget#mainToolbar QToolButton[btnKind="accent"]:hover {
+                background: rgba(127, 167, 217, 0.30);
+                border: 1px solid #7FA7D9;
+            }
+            QWidget#mainToolbar QPushButton[btnKind="secondary"],
+            QWidget#mainToolbar QToolButton[btnKind="secondary"] {
+                color: #C7D1E0;
+                background: transparent;
+                border: 1px solid rgba(255, 255, 255, 0.14);
+            }
+            QWidget#mainToolbar QPushButton[btnKind="secondary"]:hover,
+            QWidget#mainToolbar QToolButton[btnKind="secondary"]:hover {
+                background: rgba(255, 255, 255, 0.08);
+                border: 1px solid rgba(255, 255, 255, 0.28);
+            }
+            QWidget#mainToolbar QPushButton[active="true"] {
+                color: #FFFFFF;
+                background: #3D7BE0;
+                border: 1px solid #4A88EE;
+            }
+            QWidget#mainToolbar QToolButton::menu-indicator {
+                subcontrol-position: right center;
+                right: 6px;
+            }
+        """
+
     def _style_random_button(self) -> None:
-        """为随机按钮设置醒目的渐变样式和脉冲动画"""
-        btn = self.btn_random
+        """统一为随机按钮应用辅助色样式（无脉冲），避免色彩杂乱。"""
+        if not hasattr(self, "btn_random"):
+            return
+        self.btn_random.setProperty("btnKind", "accent")
+        self.btn_random.style().unpolish(self.btn_random)
+        self.btn_random.style().polish(self.btn_random)
 
-        # 渐变背景 + 突出样式
-        self._random_btn_style_normal = """
-            QPushButton {
-                color: #FFFFFF;
-                background: qlineargradient(
-                    x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #6C5CE7, stop:0.5 #A855F7, stop:1 #EC4899
-                );
-                border: 2px solid #A855F7;
-                border-radius: 10px;
-                padding: 7px 16px;
-                font-weight: bold;
-                font-size: 14px;
-            }
-            QPushButton:hover {
-                background: qlineargradient(
-                    x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #7C6CF7, stop:0.5 #B865FF, stop:1 #FC5CA9
-                );
-                border: 2px solid #C084FC;
-            }
-            QPushButton:pressed {
-                background: qlineargradient(
-                    x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #5B4BD6, stop:0.5 #9340E0, stop:1 #D63D88
-                );
-                border: 2px solid #9333EA;
-            }
-        """
-        self._random_btn_style_glow = """
-            QPushButton {
-                color: #FFFFFF;
-                background: qlineargradient(
-                    x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #7C6CF7, stop:0.5 #B865FF, stop:1 #FC5CA9
-                );
-                border: 2px solid #D8B4FE;
-                border-radius: 10px;
-                padding: 7px 16px;
-                font-weight: bold;
-                font-size: 14px;
-            }
-            QPushButton:hover {
-                background: qlineargradient(
-                    x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #8C7CFF, stop:0.5 #C875FF, stop:1 #FF6CB9
-                );
-                border: 2px solid #E9D5FF;
-            }
-            QPushButton:pressed {
-                background: qlineargradient(
-                    x1:0, y1:0, x2:1, y2:1,
-                    stop:0 #5B4BD6, stop:0.5 #9340E0, stop:1 #D63D88
-                );
-                border: 2px solid #9333EA;
-            }
-        """
-        btn.setStyleSheet(self._random_btn_style_normal)
+    def _style_history_button(self) -> None:
+        """统一为历史按钮应用辅助色样式。"""
+        if not hasattr(self, "btn_history"):
+            return
+        self.btn_history.setProperty("btnKind", "accent")
+        self.btn_history.style().unpolish(self.btn_history)
+        self.btn_history.style().polish(self.btn_history)
 
-        # 脉冲动画：定时切换 normal/glow 样式
-        self._random_glow_phase = False
-        self._random_glow_timer = QTimer(self)
-        self._random_glow_timer.timeout.connect(self._toggle_random_glow)
-        self._random_glow_timer.start(1200)
+    def _setup_search_completer(self) -> None:
+        history = self.db.get_search_history()
+        self._search_completer = QCompleter(history, self)
+        self._search_completer.setCaseSensitivity(Qt.CaseInsensitive)
+        self._search_completer.setFilterMode(Qt.MatchContains)
+        self._search_completer.setCompletionMode(QCompleter.PopupCompletion)
+        self.search_input.setCompleter(self._search_completer)
 
-    def _toggle_random_glow(self) -> None:
-        """切换随机按钮的脉冲发光状态"""
-        self._random_glow_phase = not self._random_glow_phase
-        if self._random_glow_phase:
-            self.btn_random.setStyleSheet(self._random_btn_style_glow)
-        else:
-            self.btn_random.setStyleSheet(self._random_btn_style_normal)
+    def _persist_search_term(self) -> None:
+        term = self.search_input.text().strip()
+        if not term:
+            return
+        history = self.db.add_search_history(term)
+        model = self._search_completer.model()
+        if hasattr(model, "setStringList"):
+            model.setStringList(history)
+
+    def _more_menu_icon(self, standard_pixmap: QStyle.StandardPixmap) -> QIcon:
+        return self.style().standardIcon(standard_pixmap)
+
+    def _add_more_action(
+        self,
+        menu: QMenu,
+        text: str,
+        slot,
+        *,
+        icon: QIcon | None = None,
+        tooltip: str = "",
+    ) -> QAction:
+        act = QAction(text, self)
+        if icon is not None:
+            act.setIcon(icon)
+        if tooltip:
+            act.setToolTip(tooltip)
+        act.triggered.connect(slot)
+        menu.addAction(act)
+        return act
+
+    def _style_more_menu(self, menu: QMenu) -> None:
+        menu.setStyleSheet(
+            """
+            QMenu {
+                padding: 6px 0;
+            }
+            QMenu::item {
+                padding: 8px 28px 8px 20px;
+                border-radius: 4px;
+                margin: 1px 6px;
+            }
+            QMenu::item:selected {
+                background-color: #2D6CDF;
+            }
+            QMenu::separator {
+                height: 1px;
+                background: #3D4F63;
+                margin: 6px 12px;
+            }
+            QMenu::icon {
+                padding-left: 8px;
+            }
+            """
+        )
 
     def _build_more_menu(self) -> QMenu:
         menu = QMenu(self)
+        self._style_more_menu(menu)
+        icon = self._more_menu_icon
 
-        self.act_manage_roots = QAction("管理目录…", self)
-        self.act_manage_roots.triggered.connect(self._manage_scan_roots)
-        self.act_manage_roots.setToolTip("查看、删除或清空已添加的扫描目录")
-        menu.addAction(self.act_manage_roots)
+        # ── 高频：目录 / 库 / 用户 / 游戏 ──
+        self.act_manage_roots = self._add_more_action(
+            menu,
+            "管理目录…",
+            self._manage_scan_roots,
+            icon=icon(QStyle.StandardPixmap.SP_DirIcon),
+            tooltip="查看、删除或清空已添加的扫描目录",
+        )
+        self._add_more_action(
+            menu,
+            "数据管理…",
+            self._open_game_data_manager,
+            icon=icon(QStyle.StandardPixmap.SP_FileDialogDetailedView),
+            tooltip="查看库内游戏列表，从库中删除条目（不卸载安装目录）",
+        )
+        self._add_more_action(
+            menu,
+            "新建用户",
+            self._add_user,
+            icon=icon(QStyle.StandardPixmap.SP_ComputerIcon),
+            tooltip="创建并切换到新的本地用户",
+        )
+        self._add_more_action(
+            menu,
+            "导出备份",
+            self._backup,
+            icon=icon(QStyle.StandardPixmap.SP_DialogSaveButton),
+            tooltip="备份游戏库与设置到 zip",
+        )
+        self._add_more_action(
+            menu,
+            "恢复备份",
+            self._restore,
+            icon=icon(QStyle.StandardPixmap.SP_DialogOpenButton),
+            tooltip="从备份 zip 恢复数据",
+        )
 
-        act_add_user = QAction("新建用户", self)
-        act_add_user.triggered.connect(self._add_user)
-        act_add_user.setToolTip("创建并切换到新的本地用户")
-        menu.addAction(act_add_user)
-
-        menu.addSeparator()
-
-        act_backup = QAction("导出备份", self)
-        act_backup.triggered.connect(self._backup)
-        act_backup.setToolTip("备份游戏库与设置到 zip")
-        menu.addAction(act_backup)
-
-        act_restore = QAction("恢复备份", self)
-        act_restore.triggered.connect(self._restore)
-        act_restore.setToolTip("从备份 zip 恢复数据")
-        menu.addAction(act_restore)
-
-        menu.addSeparator()
-
-        act_history = QAction("游玩历史…", self)
-        act_history.triggered.connect(self.open_play_history)
-        act_history.setToolTip("独立窗口：全部游玩记录、筛选、清空")
-        menu.addAction(act_history)
-
-        act_game_detail = QAction("游戏详情…", self)
-        act_game_detail.triggered.connect(self._open_selected_game_detail)
-        act_game_detail.setToolTip("完整元数据、游玩记录、文件夹与调试信息")
-        menu.addAction(act_game_detail)
-
-        menu.addSeparator()
-
-        act_le = QAction("Locale Emulator (LE)…", self)
-        act_le.triggered.connect(self._open_locale_emulator_settings)
-        act_le.setToolTip("配置 LEProc.exe，用于「LE 转区启动」")
-        menu.addAction(act_le)
-
-        act_twodfan = QAction("2DFan线索库…", self)
-        act_twodfan.triggered.connect(self._open_twodfan_library_dialog)
-        act_twodfan.setToolTip("配置存档路径线索库")
-        menu.addAction(act_twodfan)
-
-        act_twodfan_crawl = QAction("2DFan 一键爬取…", self)
-        act_twodfan_crawl.triggered.connect(self._start_twodfan_crawl)
-        act_twodfan_crawl.setToolTip("从 2dfan.com 爬取存档位置线索，自动配置线索库")
-        menu.addAction(act_twodfan_crawl)
-
-        menu.addSeparator()
-
-        self.act_startup = QAction("开机启动", self)
+        self.act_startup = QAction("开机启动: OFF", self)
         self.act_startup.setCheckable(True)
+        self.act_startup.setIcon(icon(QStyle.StandardPixmap.SP_MediaPlay))
         self.act_startup.triggered.connect(self._toggle_startup)
-        self.act_startup.setToolTip("是否随 Windows 登录自动启动本程序")
+        self.act_startup.setToolTip("点击切换：是否随 Windows 登录自动启动")
         menu.addAction(self.act_startup)
 
-        self.act_auto_backup = QAction("启动前备份", self)
+        self.act_auto_backup = QAction("启动前备份: OFF", self)
         self.act_auto_backup.setCheckable(True)
+        self.act_auto_backup.setIcon(icon(QStyle.StandardPixmap.SP_DialogYesButton))
         self.act_auto_backup.triggered.connect(self._toggle_auto_backup_before_launch)
-        self.act_auto_backup.setToolTip("启动游戏前自动备份已配置的存档目录")
+        self.act_auto_backup.setToolTip("点击切换：启动游戏前自动备份存档目录")
         menu.addAction(self.act_auto_backup)
 
+        self._refresh_startup_state()
         self._apply_auto_backup_launch_ui()
 
         menu.addSeparator()
 
-        act_settings = QAction("设置…", self)
-        act_settings.triggered.connect(self._open_settings)
-        act_settings.setToolTip("综合设置：启动方式、备份、封面等")
-        menu.addAction(act_settings)
-
-        act_theme = QAction("界面设置…", self)
-        act_theme.triggered.connect(self._open_theme_settings)
-        act_theme.setToolTip("自定义主题、字体、颜色")
-        menu.addAction(act_theme)
+        self._add_more_action(
+            menu,
+            "游戏详情…",
+            self._open_selected_game_detail,
+            icon=icon(QStyle.StandardPixmap.SP_FileIcon),
+            tooltip="完整元数据、游玩记录、文件夹与调试信息",
+        )
+        self._add_more_action(
+            menu,
+            "游玩历史…",
+            self.open_play_history,
+            icon=icon(QStyle.StandardPixmap.SP_FileDialogListView),
+            tooltip="独立窗口：全部游玩记录、筛选、清空",
+        )
 
         menu.addSeparator()
 
-        act_plugins = QAction("插件管理…", self)
-        act_plugins.triggered.connect(self._open_plugin_settings)
-        act_plugins.setToolTip("启用或禁用扫描结果插件")
-        menu.addAction(act_plugins)
+        # ── 工具箱（低频 / 专业工具）──
+        toolbox = menu.addMenu(
+            icon(QStyle.StandardPixmap.SP_FileDialogInfoView),
+            "🔧 工具箱",
+        )
+        self._style_more_menu(toolbox)
+        self._add_more_action(
+            toolbox,
+            "HBE 解密工具…",
+            self._open_hbe_decrypt_dialog,
+            tooltip="解密 Hexo Blog Encrypt 离线 HTML",
+        )
+        self._add_more_action(
+            toolbox,
+            "自动化解压工具…",
+            self._open_auto_extract_dialog,
+            tooltip="监控目录、解压压缩包并整理到游戏库",
+        )
+
+        extended = toolbox.addMenu("扩展工具")
+        self._style_more_menu(extended)
+        self._add_more_action(
+            extended,
+            "插件管理…",
+            self._open_plugin_settings,
+            icon=icon(QStyle.StandardPixmap.SP_DialogApplyButton),
+            tooltip="扫描 / 启动链路上的插件钩子",
+        )
+
+        self._add_more_action(
+            toolbox,
+            "Locale 模拟器 (LE)…",
+            self._open_locale_emulator_settings,
+            tooltip="配置 LEProc.exe，用于「LE 转区启动」",
+        )
+        self._add_more_action(
+            toolbox,
+            "2DFan 线索库…",
+            self._open_twodfan_library_dialog,
+            tooltip="配置存档路径线索库",
+        )
+        self._add_more_action(
+            toolbox,
+            "2DFan 一键爬取…",
+            self._start_twodfan_crawl,
+            tooltip="从 2dfan.com 爬取存档位置线索",
+        )
+
+        # ── 设置区 ──
+        self._add_more_action(
+            menu,
+            "⚙ 设置…",
+            self._open_settings,
+            icon=icon(QStyle.StandardPixmap.SP_FileDialogContentsView),
+            tooltip="综合设置：启动方式、备份、封面等",
+        )
+        self._add_more_action(
+            menu,
+            "🎨 界面设置…",
+            self._open_theme_settings,
+            icon=icon(QStyle.StandardPixmap.SP_DesktopIcon),
+            tooltip="自定义主题、字体、颜色",
+        )
 
         return menu
+
+    def _make_toolbar_group(self, title: str) -> tuple[QFrame, QHBoxLayout]:
+        frame = QFrame()
+        frame.setObjectName("toolbarGroup")
+        outer = QVBoxLayout(frame)
+        outer.setContentsMargins(8, 3, 8, 4)
+        outer.setSpacing(1)
+        label = QLabel(title)
+        label.setObjectName("toolbarGroupLabel")
+        outer.addWidget(label)
+        inner = QHBoxLayout()
+        inner.setSpacing(6)
+        inner.setContentsMargins(0, 0, 0, 0)
+        outer.addLayout(inner)
+        return frame, inner
 
     def _build_ui(self) -> None:
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
 
-        # ── 单行扁平工具栏 ──
-        toolbar = QHBoxLayout()
-        toolbar.setSpacing(6)
+        # ── 分组工具栏 ──
+        toolbar_widget = QWidget()
+        toolbar_widget.setObjectName("mainToolbar")
+        toolbar = QHBoxLayout(toolbar_widget)
+        toolbar.setSpacing(10)
         toolbar.setContentsMargins(8, 6, 8, 6)
+        toolbar_widget.setStyleSheet(self._toolbar_stylesheet())
 
+        # 搜索与筛选区
+        search_frame, search_row = self._make_toolbar_group("搜索与筛选")
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("搜索游戏（中/英/日）")
-        self.search_input.setFixedWidth(200)
+        self.search_input.setFixedWidth(190)
+        self.search_input.setClearButtonEnabled(True)
         self.search_input.textChanged.connect(self._apply_filters)
-        toolbar.addWidget(self.search_input)
+        self.search_input.returnPressed.connect(self._persist_search_term)
+        search_row.addWidget(self.search_input)
 
-        self.favorite_only = QCheckBox("仅收藏")
-        self.favorite_only.stateChanged.connect(self._apply_filters)
-        toolbar.addWidget(self.favorite_only)
+        self.filter_combo = QComboBox()
+        self.filter_combo.setToolTip("按收藏 / 游玩状态筛选")
+        self.filter_combo.addItem("全部", "")
+        self.filter_combo.addItem("仅收藏", "favorite")
+        self.filter_combo.addItem("已游玩", "played")
+        self.filter_combo.addItem("未游玩", "unplayed")
+        self.filter_combo.currentIndexChanged.connect(self._apply_filters)
+        search_row.addWidget(self.filter_combo)
 
-        toolbar.addSpacing(8)
+        self.sort_combo = QComboBox()
+        self.sort_combo.setToolTip("排序方式")
+        self.sort_combo.addItem("默认（最近更新）", "default")
+        self.sort_combo.addItem("最近添加", "added_desc")
+        self.sort_combo.addItem("最早添加", "added_asc")
+        self.sort_combo.addItem("最近游玩", "last_played")
+        self.sort_combo.addItem("游玩次数", "play_count")
+        self.sort_combo.addItem("名称", "name")
+        self.sort_combo.currentIndexChanged.connect(self._apply_filters)
+        search_row.addWidget(self.sort_combo)
+        toolbar.addWidget(search_frame)
 
+        self._setup_search_completer()
+
+        # 导入管理区
+        import_frame, import_row = self._make_toolbar_group("导入管理")
         self.btn_add_root = QPushButton("添加目录")
+        self.btn_add_root.setProperty("btnKind", "primary")
         self.btn_add_root.clicked.connect(self._add_scan_root)
         self.btn_add_root.setToolTip("选择一个游戏根目录加入扫描范围")
-        toolbar.addWidget(self.btn_add_root)
+        import_row.addWidget(self.btn_add_root)
         self._polish_toolbar_control(self.btn_add_root)
 
         self.btn_scan = QToolButton()
         self.btn_scan.setText("导入游戏")
+        self.btn_scan.setProperty("btnKind", "primary")
         self.btn_scan.setPopupMode(QToolButton.InstantPopup)
         self.btn_scan.setToolTip("扫描游戏目录并导入游戏库")
         scan_menu = QMenu(self.btn_scan)
@@ -326,43 +499,71 @@ class MainWindow(
         act_full_scan.triggered.connect(self._scan_all)
         act_full_scan.setToolTip("重新扫描所有已配置目录并同步游戏列表")
         scan_menu.addAction(act_full_scan)
+
         act_incremental_scan = QAction("增量扫描", self)
         act_incremental_scan.triggered.connect(self._scan_incremental)
         act_incremental_scan.setToolTip("只扫描新增游戏目录，跳过已有游戏")
         scan_menu.addAction(act_incremental_scan)
+
+        scan_menu.addSeparator()
+
+        act_scan_and_vndb = QAction("扫描并VNDB导入", self)
+        act_scan_and_vndb.triggered.connect(self._scan_and_vndb_import)
+        act_scan_and_vndb.setToolTip("先扫描目录，扫描完成后自动执行VNDB批量导入")
+        scan_menu.addAction(act_scan_and_vndb)
+
         self.btn_scan.setMenu(scan_menu)
-        toolbar.addWidget(self.btn_scan)
+        import_row.addWidget(self.btn_scan)
         self._polish_toolbar_control(self.btn_scan)
 
         self.btn_vndb_import = QPushButton("VNDB 导入")
+        self.btn_vndb_import.setProperty("btnKind", "secondary")
         self.btn_vndb_import.clicked.connect(self._vndb_import_from_existing)
         self.btn_vndb_import.setToolTip("对当前库批量匹配 VNDB / Bangumi 元数据与封面")
-        toolbar.addWidget(self.btn_vndb_import)
+        import_row.addWidget(self.btn_vndb_import)
         self._polish_toolbar_control(self.btn_vndb_import)
 
-        toolbar.addSpacing(8)
+        self.btn_refresh = QPushButton("刷新")
+        self.btn_refresh.setProperty("btnKind", "secondary")
+        self.btn_refresh.clicked.connect(self.refresh_games)
+        self.btn_refresh.setToolTip("重新从数据库加载列表与筛选结果")
+        import_row.addWidget(self.btn_refresh)
+        self._polish_toolbar_control(self.btn_refresh)
+        toolbar.addWidget(import_frame)
 
+        # 视图与浏览区
+        view_frame, view_row = self._make_toolbar_group("视图与浏览")
         self.btn_toggle_view = QPushButton("网格视图")
+        self.btn_toggle_view.setProperty("btnKind", "secondary")
         self.btn_toggle_view.clicked.connect(self._toggle_view_mode)
         self.btn_toggle_view.setCheckable(True)
         self.btn_toggle_view.setChecked(True)
         self.btn_toggle_view.setProperty("active", True)
         self.btn_toggle_view.setToolTip("切换网格 / 列表视图")
-        toolbar.addWidget(self.btn_toggle_view)
+        view_row.addWidget(self.btn_toggle_view)
         self._polish_toolbar_control(self.btn_toggle_view)
 
         self.btn_random = QPushButton("🎲 随机")
+        self.btn_random.setProperty("btnKind", "accent")
         self.btn_random.clicked.connect(self._random_pick_game)
         self.btn_random.setToolTip("从列表中随机选择一个游戏")
-        toolbar.addWidget(self.btn_random)
+        view_row.addWidget(self.btn_random)
         self._polish_toolbar_control(self.btn_random)
-        self._style_random_button()
 
-        self.btn_refresh = QPushButton("刷新")
-        self.btn_refresh.clicked.connect(self.refresh_games)
-        self.btn_refresh.setToolTip("重新从数据库加载列表与筛选结果")
-        toolbar.addWidget(self.btn_refresh)
-        self._polish_toolbar_control(self.btn_refresh)
+        self.btn_history = QPushButton("📜 历史记录")
+        self.btn_history.setProperty("btnKind", "accent")
+        self.btn_history.clicked.connect(self.open_play_history)
+        self.btn_history.setToolTip("查看游玩历史记录")
+        view_row.addWidget(self.btn_history)
+        self._polish_toolbar_control(self.btn_history)
+
+        self.btn_log = QPushButton("📋 日志")
+        self.btn_log.setProperty("btnKind", "secondary")
+        self.btn_log.clicked.connect(self._open_log_window)
+        self.btn_log.setToolTip("查看系统日志")
+        view_row.addWidget(self.btn_log)
+        self._polish_toolbar_control(self.btn_log)
+        toolbar.addWidget(view_frame)
 
         toolbar.addStretch(1)
 
@@ -373,9 +574,11 @@ class MainWindow(
         toolbar.addWidget(self.user_picker)
 
         self.btn_more = QToolButton()
-        self.btn_more.setText("⚙ 设置")
+        self.btn_more.setText("⚙ 更多")
         self.btn_more.setPopupMode(QToolButton.InstantPopup)
-        self.btn_more.setToolTip("设置与更多功能")
+        self.btn_more.setToolTip(
+            "目录与库管理、工具箱、数据备份、设置（按场景分组）"
+        )
         self.btn_more.setMenu(self._build_more_menu())
         toolbar.addWidget(self.btn_more)
         self._polish_toolbar_control(self.btn_more)
@@ -385,7 +588,7 @@ class MainWindow(
         self.btn_help.setToolTip("使用帮助")
         toolbar.addWidget(self.btn_help)
 
-        root.addLayout(toolbar)
+        root.addWidget(toolbar_widget)
 
         self.empty_hint = QLabel(
             "还没有游戏？点击上方「添加目录」按钮开始导入游戏库"
@@ -501,11 +704,18 @@ class MainWindow(
         self._play_history_window.raise_()
         self._play_history_window.activateWindow()
 
+    def _open_log_window(self) -> None:
+        from app.ui.dialogs.log_window import LogWindow
+        log_window = LogWindow.get_instance(self)
+        log_window.show()
+        log_window.raise_()
+        log_window.activateWindow()
+
     def open_game_detail(self, game_id: int) -> None:
         GameDetailDialog(self, game_id).exec()
 
     def open_save_manager(self, game_id: int) -> None:
-        from app.ui.save_manager_window import SaveManagerWindow
+        from app.ui.dialogs.save_manager_window import SaveManagerWindow
 
         SaveManagerWindow(self, game_id).show()
 
@@ -588,13 +798,100 @@ class MainWindow(
             return
         super().closeEvent(event)
 
+    def _ensure_toast(self) -> QLabel:
+        if getattr(self, "_toast_label", None) is None:
+            label = QLabel(self)
+            label.setObjectName("appToast")
+            label.setAlignment(Qt.AlignCenter)
+            label.setVisible(False)
+            label.setWordWrap(True)
+            label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            self._toast_effect = QGraphicsOpacityEffect(label)
+            label.setGraphicsEffect(self._toast_effect)
+            self._toast_anim = QPropertyAnimation(self._toast_effect, b"opacity", self)
+            self._toast_timer = QTimer(self)
+            self._toast_timer.setSingleShot(True)
+            self._toast_timer.timeout.connect(self._fade_out_toast)
+            self._toast_label = label
+        return self._toast_label
+
+    _TOAST_COLORS = {
+        "info": ("#2D6CDF", "#FFFFFF"),
+        "success": ("#1F9D63", "#FFFFFF"),
+        "warning": ("#C9871A", "#FFFFFF"),
+        "error": ("#C0392B", "#FFFFFF"),
+    }
+
+    def show_toast(self, message: str, level: str = "info", *, duration_ms: int = 2600) -> None:
+        if not message:
+            return
+        label = self._ensure_toast()
+        bg, fg = self._TOAST_COLORS.get(level, self._TOAST_COLORS["info"])
+        label.setStyleSheet(
+            f"QLabel#appToast {{ background: {bg}; color: {fg};"
+            "border-radius: 10px; padding: 10px 18px; font-size: 13px;"
+            "font-weight: 600; }"
+        )
+        label.setText(message)
+        label.adjustSize()
+        label.setMaximumWidth(max(360, self.width() - 80))
+        label.adjustSize()
+        self._position_toast()
+        label.setVisible(True)
+        label.raise_()
+        self._toast_anim.stop()
+        self._toast_anim.setDuration(180)
+        self._toast_anim.setStartValue(0.0)
+        self._toast_anim.setEndValue(1.0)
+        self._toast_anim.start()
+        self._toast_timer.start(duration_ms)
+
+    def _fade_out_toast(self) -> None:
+        label = getattr(self, "_toast_label", None)
+        if label is None or not label.isVisible():
+            return
+        self._toast_anim.stop()
+        self._toast_anim.setDuration(280)
+        self._toast_anim.setStartValue(1.0)
+        self._toast_anim.setEndValue(0.0)
+        try:
+            self._toast_anim.finished.disconnect()
+        except RuntimeError:
+            pass
+        self._toast_anim.finished.connect(lambda: label.setVisible(False))
+        self._toast_anim.start()
+
+    def _position_toast(self) -> None:
+        label = getattr(self, "_toast_label", None)
+        if label is None:
+            return
+        x = (self.width() - label.width()) // 2
+        y = self.height() - label.height() - 56
+        label.move(max(8, x), max(8, y))
+
+    def show_error(self, title: str, message: str, suggestion: str = "") -> None:
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Critical)
+        box.setWindowTitle(title)
+        box.setText(message)
+        if suggestion:
+            box.setInformativeText(f"建议：{suggestion}")
+        box.setStandardButtons(QMessageBox.Ok)
+        box.exec()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._position_toast()
+
     def _apply_styles(self) -> None:
         from app.ui.theme_manager import ThemeManager
         theme_manager = ThemeManager()
         self.setStyleSheet(theme_manager.get_stylesheet())
-        # 重新应用随机按钮的特殊样式（全局样式表会覆盖）
+        # 重新应用特殊按钮的样式（全局样式表会覆盖）
         if hasattr(self, 'btn_random'):
             self._style_random_button()
+        if hasattr(self, 'btn_history'):
+            self._style_history_button()
 
     def _load_theme_preferences(self) -> None:
         """从数据库加载主题偏好设置"""
@@ -627,9 +924,11 @@ class MainWindow(
         self.setStyleSheet("")
         self.setStyleSheet(new_stylesheet)
 
-        # 重新应用随机按钮的特殊样式（全局样式表会覆盖）
+        # 重新应用特殊按钮的样式（全局样式表会覆盖）
         if hasattr(self, 'btn_random'):
             self._style_random_button()
+        if hasattr(self, 'btn_history'):
+            self._style_history_button()
 
         # 强制刷新
         self.style().unpolish(self)

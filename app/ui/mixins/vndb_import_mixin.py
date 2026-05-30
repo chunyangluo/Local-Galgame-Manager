@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from functools import partial
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QMessageBox
 
 from app.data.database import VndbImportRow
@@ -44,14 +45,10 @@ class VndbImportMixin:
         show_result_dialog: bool = True,
         on_import_finished: Callable[[], None] | None = None,
     ) -> None:
-        # 收集已缓存的窗口标题
         window_titles: dict[str, str] = {}
-        for name, root_dir, launch_exe in targets:
-            game = self.db.find_game_by_root(root_dir)
-            if game is not None:
-                wt = self.db.get_game_window_title(game.id)
-                if wt:
-                    window_titles[root_dir] = wt
+        root_dirs = [root_dir for _, root_dir, _ in targets]
+        if root_dirs:
+            window_titles = self.db.get_window_titles_by_root_dirs(root_dirs)
 
         self._vndb_worker = VndbImportWorker(
             targets=targets,
@@ -71,7 +68,8 @@ class VndbImportMixin:
                 total=len(targets),
                 show_result_dialog=show_result_dialog,
                 on_import_finished=on_import_finished,
-            )
+            ),
+            Qt.QueuedConnection,
         )
         self._vndb_worker.start()
 
@@ -81,9 +79,10 @@ class VndbImportMixin:
         percent = int((processed / max(total, 1)) * 100)
         self.scan_progress.setValue(percent)
         q = f" | 当前: {query}" if query else ""
-        self.status.setText(
-            f"VNDB 导入进度 {processed}/{total}，成功 {success}，失败 {fail}{q}"
-        )
+        status_text = f"VNDB 导入进度 {processed}/{total}，成功 {success}，失败 {fail}{q}"
+        self.status.setText(status_text)
+        from app.services.log_service import LogService
+        LogService.get_instance().progress("VNDB导入", processed, total)
 
     def _on_vndb_finished(
         self,
@@ -127,7 +126,6 @@ class VndbImportMixin:
             )
             dialog.exec()
             
-            # 处理用户选择的正确条目
             selected_records = dialog.get_selected_records()
             for idx, record in selected_records:
                 name, root_dir, launch_exe = targets[idx]
