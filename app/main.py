@@ -6,6 +6,7 @@ import sys
 from PySide6.QtWidgets import QApplication
 from PySide6.QtWidgets import QMessageBox
 
+from app.services.app_branding import APP_DISPLAY_NAME, setup_app_branding
 from app.services.logging_setup import log_file_path, setup_logging
 from app.plugins.manager import PluginManager
 from app.services.app_data_dir import get_app_data_dir
@@ -17,6 +18,7 @@ def main() -> int:
     setup_logging(data_dir=data_dir)
     log = logging.getLogger(__name__)
     app = QApplication(sys.argv)
+    setup_app_branding(app)
 
     try:
         plugin_manager = PluginManager(data_dir)
@@ -28,7 +30,7 @@ def main() -> int:
         log.exception("Startup crash")
         QMessageBox.critical(
             None,
-            "Local Galgame Manager 启动失败",
+            f"{APP_DISPLAY_NAME} 启动失败",
             f"程序启动异常，详情见日志：\n{log_file_path(data_dir)}",
         )
         return 1

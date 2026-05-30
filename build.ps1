@@ -30,7 +30,16 @@ if ($LASTEXITCODE -ne 0) {
     exit $LASTEXITCODE
 }
 
-python -m PyInstaller --noconfirm --windowed --name LocalGalgameManager app/main.py --distpath "$distPath" --workpath "$workPath"
+$iconPath = Join-Path $PSScriptRoot "app\assets\app_icon.ico"
+if (-not (Test-Path $iconPath)) {
+    Write-Error "Missing app icon: $iconPath"
+    exit 1
+}
+
+python -m PyInstaller --noconfirm --windowed --name LocalGalgameManager `
+    --icon "$iconPath" `
+    --add-data "${iconPath};app/assets" `
+    app/main.py --distpath "$distPath" --workpath "$workPath"
 if ($LASTEXITCODE -ne 0) {
     Write-Error "PyInstaller build failed."
     exit $LASTEXITCODE
@@ -42,7 +51,7 @@ if (-not (Test-Path $exePath)) {
     exit 1
 }
 
-$shortcutPath = Join-Path $desktopPath "Local Galgame Manager.lnk"
+$shortcutPath = Join-Path $desktopPath "本地 Galgame 管理器.lnk"
 $workingDirectory = Split-Path $exePath -Parent
 
 try {

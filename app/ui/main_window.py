@@ -31,6 +31,7 @@ from PySide6.QtWidgets import (
     QListWidget,
 )
 
+from app.services.app_branding import APP_DISPLAY_NAME, load_app_icon
 from app.services.cover_manager import CoverManager
 from app.core.launcher import GameLauncher
 from app.core.scanner import GameScanner
@@ -66,9 +67,12 @@ class MainWindow(
 ):
     def __init__(self, data_dir: Path, plugin_manager: PluginManager | None = None) -> None:
         super().__init__()
-        self.setWindowTitle("Local Galgame Manager")
+        self.setWindowTitle(APP_DISPLAY_NAME)
         self.resize(1100, 700)
         self.setMinimumSize(980, 620)
+        self._app_icon = load_app_icon()
+        if not self._app_icon.isNull():
+            self.setWindowIcon(self._app_icon)
 
         self.db = Database(data_dir)
         self.current_user_id = self.db.ensure_default_user()
@@ -649,7 +653,9 @@ class MainWindow(
 
     def _setup_tray(self) -> None:
         self.tray_icon = QSystemTrayIcon(self)
-        self.tray_icon.setIcon(QIcon())
+        self.tray_icon.setIcon(
+            self._app_icon if not self._app_icon.isNull() else load_app_icon()
+        )
         menu = self.tray_icon.contextMenu() or self._create_tray_menu()
         self.tray_icon.setContextMenu(menu)
         self.tray_icon.activated.connect(self._on_tray_activated)
@@ -794,7 +800,7 @@ class MainWindow(
     def closeEvent(self, event: QCloseEvent) -> None:
         if not self._allow_close and self.tray_icon is not None and self.isVisible():
             self.hide()
-            self.tray_icon.showMessage("Local Galgame Manager", "已最小化到系统托盘")
+            self.tray_icon.showMessage(APP_DISPLAY_NAME, "已最小化到系统托盘")
             event.ignore()
             return
         super().closeEvent(event)
@@ -1012,7 +1018,7 @@ class MainWindow(
             .shortcut { background: #2E3644; padding: 2px 6px; border-radius: 3px; font-family: monospace; }
             .version { color: #8AB4E0; font-size: 13px; margin-bottom: 8px; }
         </style>
-        <p class="version"><b>Local Galgame Manager v2.0.11</b></p>
+        <p class="version"><b>本地 Galgame 管理器 v2.0.11</b></p>
 
         <h2>快速入门</h2>
         <ol>
