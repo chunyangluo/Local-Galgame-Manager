@@ -6,8 +6,6 @@
   <img src="docs/assets/main-window.png" alt="Local Galgame Manager 主界面" width="820" />
 </p>
 
-**补图**：将主窗口截图保存为 `docs/assets/main-window.png` 后提交，GitHub 与本地预览即可显示。
-
 ---
 
 ## 核心亮点

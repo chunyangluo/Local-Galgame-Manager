@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import sys
 from pathlib import Path
 
 from PySide6.QtCore import QSize, QThread, QThreadPool, QTimer, Qt, Signal, QPropertyAnimation, QEasingCurve
@@ -949,92 +950,159 @@ class MainWindow(
         dialog.settings_changed.connect(self._on_settings_changed)
         dialog.exec()
     
+    def _resolve_project_dir(self) -> Path:
+        """Program / repository root for opening in the file manager."""
+        from app.services.paths import dev_repo_root
+
+        root = dev_repo_root()
+        if root is not None:
+            return root
+        if getattr(sys, "frozen", False):
+            return Path(sys.executable).resolve().parent
+        return Path(__file__).resolve().parent.parent.parent
+
     def _show_help(self) -> None:
         """显示使用帮助"""
-        from PySide6.QtWidgets import QDialog, QTextBrowser, QDialogButtonBox
-        
+        from PySide6.QtWidgets import QDialog, QDialogButtonBox, QTextBrowser
+
+        from app.ui.dialogs.game_detail_dialog import reveal_in_explorer
+
         dialog = QDialog(self)
         dialog.setWindowTitle("使用帮助")
-        dialog.setMinimumSize(520, 480)
+        dialog.setMinimumSize(560, 520)
         layout = QVBoxLayout(dialog)
-        
+
+        project_dir = self._resolve_project_dir()
+        shortcut_row = QHBoxLayout()
+        btn_open_project = QPushButton("📁 打开项目目录")
+        btn_open_project.setToolTip(
+            f"在资源管理器中打开程序所在目录\n{project_dir}"
+        )
+        btn_open_data = QPushButton("💾 打开数据目录")
+        btn_open_data.setToolTip(
+            f"封面、存档备份与数据库所在目录\n{self.db.base_dir}"
+        )
+
+        def _open_dir(path: Path, *, title: str) -> None:
+            try:
+                reveal_in_explorer(str(path), select_file=False)
+            except FileNotFoundError:
+                QMessageBox.warning(dialog, title, f"目录不存在：\n{path}")
+
+        btn_open_project.clicked.connect(
+            lambda: _open_dir(project_dir, title="打开项目目录")
+        )
+        btn_open_data.clicked.connect(
+            lambda: _open_dir(self.db.base_dir, title="打开数据目录")
+        )
+        shortcut_row.addWidget(btn_open_project)
+        shortcut_row.addWidget(btn_open_data)
+        shortcut_row.addStretch()
+        layout.addLayout(shortcut_row)
+
         browser = QTextBrowser()
         browser.setOpenExternalLinks(True)
         browser.setHtml("""
         <style>
             body { font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif; color: #C8D0DC; }
             h2 { color: #6A9FD8; font-size: 16px; border-bottom: 1px solid #3D4759; padding-bottom: 4px; }
-            h3 { color: #8AB4E0; font-size: 13px; }
+            h3 { color: #8AB4E0; font-size: 13px; margin-top: 14px; }
             p, li { font-size: 12px; line-height: 1.6; }
-            ul { padding-left: 20px; }
+            ul, ol { padding-left: 20px; }
             .shortcut { background: #2E3644; padding: 2px 6px; border-radius: 3px; font-family: monospace; }
+            .version { color: #8AB4E0; font-size: 13px; margin-bottom: 8px; }
         </style>
+        <p class="version"><b>Local Galgame Manager v2.0.11</b></p>
+
         <h2>快速入门</h2>
         <ol>
-            <li><b>添加目录</b> — 点击「添加目录」，选择你的游戏根目录</li>
-            <li><b>导入游戏</b> — 点击「导入游戏」→「全量扫描」，自动识别目录下的游戏</li>
-            <li><b>启动游戏</b> — 双击游戏卡片即可启动</li>
+            <li><b>添加目录</b> — 「导入管理」→「添加目录」，选择游戏根目录</li>
+            <li><b>导入游戏</b> — 「导入游戏」→「全量扫描」或「扫描并 VNDB 导入」</li>
+            <li><b>启动游戏</b> — 双击卡片；右键可选 LE 转区 / 管理员启动</li>
         </ol>
-        
-        <h2>工具栏功能</h2>
+
+        <h2>工具栏（分组）</h2>
+        <h3>搜索与筛选</h3>
         <ul>
-            <li><b>搜索框</b> — 输入关键词实时筛选游戏</li>
-            <li><b>仅收藏</b> — 只显示已收藏的游戏</li>
-            <li><b>添加目录</b> — 添加新的游戏扫描目录</li>
-            <li><b>导入游戏</b> — 全量扫描或增量扫描新游戏</li>
-            <li><b>VNDB导入</b> — 从VNDB/Bangumi批量获取封面和元数据</li>
-            <li><b>网格/列表视图</b> — 切换显示模式</li>
-            <li><b>🎲随机</b> — 随机选一个游戏，支持换一个重新随机</li>
+            <li><b>搜索框</b> — 中/英/日关键词；下拉可复用历史记录</li>
+            <li><b>筛选</b> — 全部 / 仅收藏 / 已游玩 / 未游玩</li>
+            <li><b>排序</b> — 默认、添加时间、最近游玩、游玩次数、名称等</li>
         </ul>
-        
+        <h3>导入管理</h3>
+        <ul>
+            <li><b>添加目录</b> — 加入扫描范围</li>
+            <li><b>导入游戏</b> — 全量扫描、增量扫描、扫描并 VNDB 导入</li>
+            <li><b>VNDB 导入</b> — 对现有库补全元数据与封面</li>
+            <li><b>刷新</b> — 重新加载列表与筛选结果</li>
+        </ul>
+        <h3>视图与浏览</h3>
+        <ul>
+            <li><b>网格 / 列表</b> — 切换视图；底部分页显示总数与页码，可跳转</li>
+            <li><b>🎲 随机</b> — 从当前列表随机选一款，支持「换一个」</li>
+            <li><b>📜 历史记录</b> — 游玩历史独立窗口</li>
+            <li><b>📋 日志</b> — 查看运行日志</li>
+        </ul>
+
+        <h2>「更多」菜单</h2>
+        <ul>
+            <li><b>管理目录 / 数据管理</b> — 扫描路径与从库删除游戏</li>
+            <li><b>导出 / 恢复备份</b> — 库与设置 zip 备份</li>
+            <li><b>开机启动 / 启动前备份</b> — 可点击切换 ON/OFF</li>
+            <li><b>游戏详情 / 游玩历史</b> — 元数据与记录</li>
+            <li><b>🔧 工具箱</b> — HBE 解密、自动化解压、插件、LE、2DFan 线索库与爬虫</li>
+            <li><b>⚙ 设置 / 🎨 界面设置</b> — 启动方式、封面策略、主题等</li>
+        </ul>
+
+        <h2>工具箱（简要）</h2>
+        <ul>
+            <li><b>HBE 解密</b> — 离线解密 Hexo Blog Encrypt HTML（单文件 / 批量）</li>
+            <li><b>自动化解压</b> — 监控目录、扫描压缩包并解压整理；支持进度与停止</li>
+            <li><b>插件管理</b> — 扫描 / 启动链路上的扩展钩子</li>
+        </ul>
+
         <h2>右键菜单</h2>
         <ul>
-            <li><b>启动游戏</b> — 正常启动</li>
-            <li><b>LE转区启动</b> — 通过Locale Emulator转区运行（需先配置LE路径）</li>
-            <li><b>管理员启动</b> — 以管理员权限运行</li>
-            <li><b>游戏详情</b> — 查看完整信息和游玩记录</li>
-            <li><b>存档管理</b> — 备份/还原存档</li>
-            <li><b>收藏</b> — 收藏/取消收藏</li>
-            <li><b>编辑名称/路径</b> — 修改游戏名称或启动exe路径</li>
-            <li><b>封面 → 设置封面</b> — 手动选择本地图片作为封面</li>
-            <li><b>封面 → 重新获取封面</b> — 从VNDB重新下载封面</li>
-            <li><b>创建桌面快捷方式</b> — 在桌面生成快捷方式</li>
-            <li><b>分配分类</b> — 将游戏归入自定义分类</li>
+            <li><b>启动 / LE 转区 / 管理员启动</b></li>
+            <li><b>游戏详情 / 存档管理 / 收藏</b></li>
+            <li><b>编辑名称·路径 / 封面 / 分类 / 桌面快捷方式</b></li>
+            <li><b>从库中删除</b> — 可选同时删除安装文件夹（二次确认）</li>
         </ul>
-        
+
         <h2>快捷键</h2>
         <ul>
             <li><span class="shortcut">双击</span> 启动游戏</li>
-            <li><span class="shortcut">右键</span> 打开上下文菜单</li>
+            <li><span class="shortcut">右键</span> 上下文菜单</li>
             <li><span class="shortcut">Ctrl+F</span> 聚焦搜索框</li>
             <li><span class="shortcut">Ctrl+I</span> 打开游戏详情</li>
         </ul>
-        
+
         <h2>设置说明</h2>
         <ul>
-            <li><b>双击打开方式</b> — 可选「普通启动」「强制LE转区」「智能模式（记住上次）」</li>
-            <li><b>封面策略</b> — 「仅本地」只使用本地图片；「本地优先」优先本地；「网图优先」优先VNDB</li>
-            <li><b>LE路径</b> — 在「更多」→「设置」中配置LEProc.exe路径</li>
+            <li><b>双击打开方式</b> — 普通 / 强制 LE / 智能（记住上次）</li>
+            <li><b>封面策略</b> — 仅本地 / 本地优先 / 网图优先</li>
+            <li><b>LE 路径</b> — 「更多」→「工具箱」→「Locale 模拟器 (LE)…」</li>
         </ul>
-        
+
         <h2>常见问题</h2>
         <ul>
-            <li><b>游戏没有被识别？</b> — 确保目录下有.exe文件，尝试重新扫描</li>
-            <li><b>启动exe不对？</b> — 右键→「编辑名称/路径」修改启动路径</li>
-            <li><b>封面不显示？</b> — 切换封面策略为「本地优先」或右键→「封面」→「重新获取」</li>
-            <li><b>LE转区启动灰色？</b> — 需先在设置中配置LEProc.exe路径</li>
+            <li><b>游戏未识别？</b> — 确认目录含 .exe，重新全量扫描</li>
+            <li><b>启动 exe 不对？</b> — 右键「编辑名称/路径」</li>
+            <li><b>封面不显示？</b> — 调整封面策略或右键重新获取</li>
+            <li><b>解压/扫描看似卡住？</b> — 查看进度条与日志；大压缩包耗时较长属正常</li>
+            <li><b>LE 转区灰色？</b> — 先在工具箱中配置 LEProc.exe</li>
         </ul>
-        
+
         <p style="color: #5A6474; margin-top: 16px;">
         项目主页：<a href="https://github.com/chunyangluo/Local-Galgame-Manager" style="color: #6A9FD8;">GitHub</a>
+        · 完整手册见仓库 <code>docs/USER_GUIDE.md</code>
         </p>
         """)
         layout.addWidget(browser)
-        
+
         btn_box = QDialogButtonBox(QDialogButtonBox.Ok)
         btn_box.accepted.connect(dialog.accept)
         layout.addWidget(btn_box)
-        
+
         dialog.exec()
     
     def _on_settings_changed(self) -> None:
