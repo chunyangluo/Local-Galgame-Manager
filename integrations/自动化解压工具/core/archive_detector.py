@@ -207,7 +207,7 @@ def detect_split_volume_set(file_path: str | Path) -> Optional[dict]:
                 archive_e01 = archive_dir / f"{base_stem}.e01"
                 if archive_e01.exists():
                     has_e01 = True
-            except:
+            except Exception:
                 pass
     elif e01_match:
         base_stem = e01_match.group(1)

@@ -4,12 +4,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-_APP_DIR = Path(__file__).resolve().parent
+_APP_DIR = Path(__file__).resolve().parent.parent  # app/services/ -> app/
 
 
 def dev_repo_root() -> Path | None:
     """Return repository root if dev tree markers are present (source checkout)."""
-    root = _APP_DIR.parent.parent
+    root = _APP_DIR.parent
     markers = (
         root / "tools" / "2dfan-save-crawler" / "README.md",
         root / "integrations" / "README.md",

@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QApplication,
     QMainWindow,
     QMenu,
     QMessageBox,
@@ -90,6 +91,7 @@ class MainWindow(
         self.cover_fetch_mode = self.db.get_cover_fetch_mode()
         self.cover_manager.cover_fetch_mode = self.cover_fetch_mode
         self.auto_backup_before_launch = self.db.get_auto_backup_before_launch()
+        self.show_hidden_games = False
 
         self.games_cache: list[GameRecord] = []
         self.filtered_games: list[GameRecord] = []
@@ -336,8 +338,16 @@ class MainWindow(
         self.act_auto_backup.setToolTip("点击切换：启动游戏前自动备份存档目录")
         menu.addAction(self.act_auto_backup)
 
+        self.act_show_hidden = QAction("显示隐藏游戏: OFF", self)
+        self.act_show_hidden.setCheckable(True)
+        self.act_show_hidden.setIcon(icon(QStyle.StandardPixmap.SP_DialogNoButton))
+        self.act_show_hidden.triggered.connect(self._toggle_show_hidden_games)
+        self.act_show_hidden.setToolTip("点击切换：是否在列表中显示已隐藏的游戏（重启后默认不显示）")
+        menu.addAction(self.act_show_hidden)
+
         self._refresh_startup_state()
         self._apply_auto_backup_launch_ui()
+        self._apply_show_hidden_games_ui()
 
         menu.addSeparator()
 
@@ -375,6 +385,12 @@ class MainWindow(
             "自动化解压工具…",
             self._open_auto_extract_dialog,
             tooltip="监控目录、解压压缩包并整理到游戏库",
+        )
+        self._add_more_action(
+            toolbox,
+            "FDM 下载管理…",
+            self._open_fdm_dialog,
+            tooltip="打开 Free Download Manager 或粘贴链接新建下载任务",
         )
 
         extended = toolbox.addMenu("扩展工具")
@@ -652,12 +668,14 @@ class MainWindow(
         self._apply_styles()
 
     def _setup_tray(self) -> None:
+        app = QApplication.instance()
+        if app is not None:
+            app.setQuitOnLastWindowClosed(False)
         self.tray_icon = QSystemTrayIcon(self)
         self.tray_icon.setIcon(
             self._app_icon if not self._app_icon.isNull() else load_app_icon()
         )
-        menu = self.tray_icon.contextMenu() or self._create_tray_menu()
-        self.tray_icon.setContextMenu(menu)
+        self.tray_icon.setContextMenu(self._create_tray_menu())
         self.tray_icon.activated.connect(self._on_tray_activated)
         self.tray_icon.show()
 
@@ -666,14 +684,26 @@ class MainWindow(
         open_action = QAction("打开主界面", self)
         open_action.triggered.connect(self.showNormal)
         menu.addAction(open_action)
-        quit_action = QAction("退出", self)
+        quit_action = QAction("退出程序", self)
         quit_action.triggered.connect(self._quit_from_tray)
         menu.addAction(quit_action)
         return menu
 
+    def _teardown_tray(self) -> None:
+        if self.tray_icon is None:
+            return
+        self.tray_icon.hide()
+        self.tray_icon.deleteLater()
+        self.tray_icon = None
+
     def _quit_from_tray(self) -> None:
         self._allow_close = True
         self.close()
+
+    def _quit_application(self) -> None:
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()
 
     def _on_tray_activated(self, reason) -> None:
         if reason == QSystemTrayIcon.Trigger:
@@ -764,6 +794,11 @@ class MainWindow(
         favorite_action.triggered.connect(self._toggle_favorite)
         self.addAction(favorite_action)
 
+        hide_action = QAction(self)
+        hide_action.setShortcut("Ctrl+H")
+        hide_action.triggered.connect(self._toggle_hidden)
+        self.addAction(hide_action)
+
         detail_action = QAction(self)
         detail_action.setShortcut("Ctrl+I")
         detail_action.triggered.connect(self._open_selected_game_detail)
@@ -798,12 +833,18 @@ class MainWindow(
             QMessageBox.warning(self, "创建失败", str(exc))
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        if not self._allow_close and self.tray_icon is not None and self.isVisible():
-            self.hide()
-            self.tray_icon.showMessage(APP_DISPLAY_NAME, "已最小化到系统托盘")
+        if not self._allow_close and self.tray_icon is not None:
+            if self.isVisible():
+                self.hide()
+                self.tray_icon.showMessage(
+                    APP_DISPLAY_NAME,
+                    "已最小化到系统托盘；右键托盘图标选「退出程序」可完全退出",
+                )
             event.ignore()
             return
+        self._teardown_tray()
         super().closeEvent(event)
+        self._quit_application()
 
     def _ensure_toast(self) -> QLabel:
         if getattr(self, "_toast_label", None) is None:
@@ -1018,7 +1059,7 @@ class MainWindow(
             .shortcut { background: #2E3644; padding: 2px 6px; border-radius: 3px; font-family: monospace; }
             .version { color: #8AB4E0; font-size: 13px; margin-bottom: 8px; }
         </style>
-        <p class="version"><b>本地 Galgame 管理器 v2.0.11</b></p>
+        <p class="version"><b>本地 Galgame 管理器 v2.0.12</b></p>
 
         <h2>快速入门</h2>
         <ol>
@@ -1053,23 +1094,30 @@ class MainWindow(
         <ul>
             <li><b>管理目录 / 数据管理</b> — 扫描路径与从库删除游戏</li>
             <li><b>导出 / 恢复备份</b> — 库与设置 zip 备份</li>
-            <li><b>开机启动 / 启动前备份</b> — 可点击切换 ON/OFF</li>
+            <li><b>开机启动 / 启动前备份 / 显示隐藏游戏</b> — 可点击切换 ON/OFF（显示隐藏默认关，重启不记忆）</li>
             <li><b>游戏详情 / 游玩历史</b> — 元数据与记录</li>
-            <li><b>🔧 工具箱</b> — HBE 解密、自动化解压、插件、LE、2DFan 线索库与爬虫</li>
+            <li><b>🔧 工具箱</b> — HBE、自动化解压、插件、LE、2DFan、FDM 下载管理</li>
             <li><b>⚙ 设置 / 🎨 界面设置</b> — 启动方式、封面策略、主题等</li>
         </ul>
 
         <h2>工具箱（简要）</h2>
         <ul>
             <li><b>HBE 解密</b> — 离线解密 Hexo Blog Encrypt HTML（单文件 / 批量）</li>
-            <li><b>自动化解压</b> — 监控目录、扫描压缩包并解压整理；支持进度与停止</li>
+            <li><b>自动化解压</b> — 监控目录、扫描解压（进度、可停止）；RAR5/ISO+MDS 等会自动选用合适工具；<b>仅光盘镜像（ISO+MDS）</b>展开后提示安装 setup.exe，普通压缩包不会弹出安装提示；解压后自动清理空目录、提升单层包装目录；建议安装到 <b>game_save 子目录</b>，勿装到游戏库根目录；误装根目录可用「整理散落安装」</li>
+            <li><b>FDM 下载管理</b> — 配置 Free Download Manager 路径，打开 FDM 或添加下载链接</li>
             <li><b>插件管理</b> — 扫描 / 启动链路上的扩展钩子</li>
+        </ul>
+
+        <h2>托盘与退出</h2>
+        <ul>
+            <li>点主窗口 <b>×</b> — 最小化到系统托盘，程序仍在运行</li>
+            <li>托盘图标右键 → <b>退出程序</b> — 真正结束进程</li>
         </ul>
 
         <h2>右键菜单</h2>
         <ul>
             <li><b>启动 / LE 转区 / 管理员启动</b></li>
-            <li><b>游戏详情 / 存档管理 / 收藏</b></li>
+            <li><b>游戏详情 / 存档管理 / 收藏 / 隐藏</b></li>
             <li><b>编辑名称·路径 / 封面 / 分类 / 桌面快捷方式</b></li>
             <li><b>从库中删除</b> — 可选同时删除安装文件夹（二次确认）</li>
         </ul>
@@ -1079,6 +1127,8 @@ class MainWindow(
             <li><span class="shortcut">双击</span> 启动游戏</li>
             <li><span class="shortcut">右键</span> 上下文菜单</li>
             <li><span class="shortcut">Ctrl+F</span> 聚焦搜索框</li>
+            <li><span class="shortcut">Ctrl+D</span> 收藏 / 取消收藏</li>
+            <li><span class="shortcut">Ctrl+H</span> 隐藏 / 取消隐藏</li>
             <li><span class="shortcut">Ctrl+I</span> 打开游戏详情</li>
         </ul>
 
@@ -1094,7 +1144,9 @@ class MainWindow(
             <li><b>游戏未识别？</b> — 确认目录含 .exe，重新全量扫描</li>
             <li><b>启动 exe 不对？</b> — 右键「编辑名称/路径」</li>
             <li><b>封面不显示？</b> — 调整封面策略或右键重新获取</li>
-            <li><b>解压/扫描看似卡住？</b> — 查看进度条与日志；大压缩包耗时较长属正常</li>
+            <li><b>解压/扫描看似卡住？</b> — 查看进度条与日志；大压缩包、ISO 展开耗时较长属正常</li>
+            <li><b>隐藏的游戏找不到？</b> — 「更多」→ 开启「显示隐藏游戏」，或 <span class="shortcut">Ctrl+H</span> 取消隐藏</li>
+            <li><b>关了窗口还在后台？</b> — 用托盘「退出程序」；仅关窗口是进托盘</li>
             <li><b>LE 转区灰色？</b> — 先在工具箱中配置 LEProc.exe</li>
         </ul>
 

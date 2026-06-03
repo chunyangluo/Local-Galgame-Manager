@@ -29,6 +29,9 @@ _INTEGRATION_DEPS = (
     ("lz4", "lz4"),
     ("cryptography", "cryptography"),
     ("pydantic", "pydantic"),
+    ("pydantic_settings", "pydantic-settings"),
+    ("fastapi", "fastapi"),
+    ("uvicorn", "uvicorn"),
 )
 
 
@@ -87,15 +90,44 @@ def config_yaml_path() -> Path | None:
     return auto_extract_config_path()
 
 
+def _default_directories() -> dict[str, str]:
+    """Provide reasonable default directories based on system."""
+    import os
+    from pathlib import Path
+    
+    home = Path.home()
+    downloads = home / "Downloads"
+    default_watch = str(downloads / "galgame")
+    default_target = str(downloads / "galgame" / "_extract")
+    default_archive = str(downloads / "galgame" / "_archive")
+    default_failed = str(downloads / "galgame" / "_failed")
+    default_temp = str(downloads / "galgame" / "_temp")
+    default_game_save = str(home / "Documents" / "galgame")
+    
+    return {
+        "watch": default_watch,
+        "target": default_target,
+        "archive": default_archive,
+        "failed": default_failed,
+        "temp": default_temp,
+        "game_save": default_game_save,
+    }
+
+
 def read_directory_config() -> dict[str, str]:
     path = config_yaml_path()
     if path is None or not path.is_file():
-        return {}
+        return _default_directories()
     with open(path, encoding="utf-8") as f:
         data = yaml.safe_load(f) or {}
     dirs = data.get("directories") or {}
+    
+    defaults = _default_directories()
     keys = ("watch", "target", "archive", "failed", "temp", "game_save")
-    return {k: str(dirs.get(k, "")) for k in keys}
+    result = {}
+    for k in keys:
+        result[k] = str(dirs.get(k, defaults.get(k, "")))
+    return result
 
 
 def write_directory_config(updates: dict[str, str]) -> None:
@@ -351,13 +383,34 @@ async def _scan_async(
             post_result, _moved = file_manager.handle_extract_result(extract_result)
             if extract_result.success:
                 result.success += 1
+                msg_parts = [str(extract_result.extract_dir or "")]
+                expanded = post_result.get("iso_expanded") if post_result else None
+                if expanded:
+                    msg_parts.append(f"已展开光盘: {', '.join(expanded)}")
+                installer = post_result.get("installer_exe") if post_result else None
+                if installer:
+                    msg_parts.append(f"安装程序: {Path(installer).name}")
+                iso_errors = post_result.get("iso_errors") if post_result else None
+                if iso_errors:
+                    msg_parts.append(
+                        "光盘展开失败: "
+                        + "; ".join(f"{e.get('iso', '?')}" for e in iso_errors)
+                    )
+                needs_guide = bool(expanded)
                 emit({
                     "phase": "file_done",
                     "index": index,
                     "total": total,
                     "name": item.name,
                     "success": True,
-                    "message": str(extract_result.extract_dir or ""),
+                    "message": " | ".join(p for p in msg_parts if p),
+                    "extract_dir": str(extract_result.extract_dir or ""),
+                    "installer_exe": installer or "",
+                    "iso_expanded": list(expanded) if expanded else [],
+                    "needs_install_guide": needs_guide,
+                    "archive_file_name": item.name,
+                    "game_save_dir": read_directory_config().get("game_save", ""),
+                    "post_process": dict(post_result or {}),
                 })
             else:
                 result.failed += 1

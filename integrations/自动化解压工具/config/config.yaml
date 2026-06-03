@@ -45,6 +45,11 @@ post_process:
   enabled: true
   move_game_dir: true
   delete_archive: false
+  iso_images:
+    enabled: true
+    try_mount_fallback: true
+    move_iso_to_subfolder: true
+    disc_subfolder: "_disc_images"
   game_detection:
     enabled: true
     keywords:

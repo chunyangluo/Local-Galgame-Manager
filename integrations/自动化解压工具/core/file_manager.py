@@ -7,9 +7,10 @@ from loguru import logger
 
 from core.config import get_settings
 from core.extractor import ExtractResult
+from core.iso_handler import expand_disc_images_in_directory, find_installer_exe
 from core.logger import (
     ui_game_found, ui_game_moved, ui_game_move_fail, ui_archive_done,
-    print_warning,
+    print_step, print_warning,
 )
 
 
@@ -35,6 +36,7 @@ class FileManager:
                 try:
                     src.unlink()
                     logger.info(f"已删除监控目录中的重复文件: {src.name}")
+                    self._cleanup_empty_parent_dirs(src)
                 except Exception as e:
                     logger.warning(f"删除监控目录中重复文件失败: {src.name} | {e}")
             return str(dest)
@@ -48,12 +50,14 @@ class FileManager:
                 try:
                     src.unlink()
                     logger.info(f"已删除监控目录中的重复文件: {src.name}")
+                    self._cleanup_empty_parent_dirs(src)
                 except Exception as e:
                     logger.warning(f"删除监控目录中重复文件失败: {src.name} | {e}")
             return str(dest)
         
         shutil.move(str(src), str(dest))
         ui_archive_done(src.name)
+        self._cleanup_empty_parent_dirs(src)
         return str(dest)
 
     def delete_file(self, file_path: str | Path) -> str:
@@ -76,6 +80,7 @@ class FileManager:
         dest = self._resolve_conflict(dest)
         shutil.move(str(src), str(dest))
         logger.warning(f"失败迁移: {src.name} -> {dest.name} | 原因={reason}")
+        self._cleanup_empty_parent_dirs(src)
         return str(dest)
 
     def archive_split_sfx_files(self, files: list[str]) -> list[str]:
@@ -100,6 +105,7 @@ class FileManager:
                     try:
                         src.unlink()
                         logger.info(f"已删除监控目录中的重复文件: {src.name}")
+                        self._cleanup_empty_parent_dirs(src)
                     except Exception as e:
                         logger.warning(f"删除监控目录中重复文件失败: {src.name} | {e}")
                 archived.append(str(dest))
@@ -114,6 +120,7 @@ class FileManager:
                     try:
                         src.unlink()
                         logger.info(f"已删除监控目录中的重复文件: {src.name}")
+                        self._cleanup_empty_parent_dirs(src)
                     except Exception as e:
                         logger.warning(f"删除监控目录中重复文件失败: {src.name} | {e}")
                 archived.append(str(dest))
@@ -127,6 +134,7 @@ class FileManager:
             shutil.move(str(src), str(dest))
             archived.append(str(dest))
             ui_archive_done(src.name)
+            self._cleanup_empty_parent_dirs(src)
         return archived
 
     def delete_files(self, files: list[str]) -> list[str]:
@@ -151,6 +159,7 @@ class FileManager:
             dest = failed_dir / src.name
             dest = self._resolve_conflict(dest)
             shutil.move(str(src), str(dest))
+            self._cleanup_empty_parent_dirs(src)
             moved.append(str(dest))
         print_warning(f"分卷包失败迁移: {len(moved)}个文件 | 原因={reason}")
         return moved
@@ -188,7 +197,7 @@ class FileManager:
             pass
         return total
 
-    def detect_game_directory(self, extract_dir: str) -> list[Path]:
+    def detect_game_directory(self, extract_dir: str, *, has_iso_expanded: bool = False) -> list[Path]:
         cfg = self._settings.post_process.game_detection
         if not cfg.enabled:
             logger.info("游戏目录识别未启用")
@@ -216,6 +225,14 @@ class FileManager:
             except Exception:
                 pass
             return False
+
+        disc_folder = (
+            getattr(self._settings.post_process, "iso_images", None)
+            and self._settings.post_process.iso_images.disc_subfolder
+        ) or "_disc_images"
+
+        def is_disc_storage_dir(dir_path: Path) -> bool:
+            return dir_path.name.lower() == str(disc_folder).lower()
 
         def is_wrapper_dir(dir_path: Path) -> bool:
             """空壳目录：只包含一个子目录，没有其他有意义的内容"""
@@ -270,12 +287,34 @@ class FileManager:
             
             return current
 
+        # Only use installer-based detection for disc images.
+        # Regular game archives may contain setup.exe but it's typically
+        # the game launcher or a self-extractor, not a disc installer.
+        if has_iso_expanded:
+            installer = find_installer_exe(target)
+            if installer is not None:
+                install_root = find_game_root(installer.parent)
+                if not is_disc_storage_dir(install_root) and not is_android_dir(install_root):
+                    size = self._quick_dir_size(install_root)
+                    if size >= min_size_bytes or any(
+                        f.suffix.lower() == ".exe" for f in install_root.iterdir() if f.is_file()
+                    ):
+                        ui_game_found(install_root.name, size / 1024 / 1024)
+                        logger.info(f"游戏根目录(光盘安装): {install_root.name} ({size/1024/1024:.1f}MB)")
+                        return [install_root]
+
         # 找到游戏根目录
         game_root = find_game_root(target)
+        if is_disc_storage_dir(game_root):
+            return []
         
         # 如果游戏根目录就是 target 本身，检查子目录
         if game_root == target:
-            subdirs = [d for d in target.iterdir() if d.is_dir() and not is_android_dir(d)]
+            subdirs = [
+                d
+                for d in target.iterdir()
+                if d.is_dir() and not is_android_dir(d) and not is_disc_storage_dir(d)
+            ]
             if len(subdirs) == 1:
                 game_root = find_game_root(subdirs[0])
             elif len(subdirs) > 1:
@@ -283,6 +322,8 @@ class FileManager:
                 best = None
                 best_score = -1
                 for d in subdirs:
+                    if is_disc_storage_dir(d):
+                        continue
                     root = find_game_root(d)
                     size = self._quick_dir_size(root)
                     has_exe = any(f.suffix.lower() == ".exe" for f in root.iterdir() if f.is_file())
@@ -349,6 +390,8 @@ class FileManager:
                 shutil.move(str(game_dir), str(dest))
                 if is_cover:
                     logger.info("游戏目录覆盖完成")
+                # Auto-unwrap single-child wrapper directories
+                dest = self._unwrap_single_child_dir(dest)
                 moved.append((str(dest), is_cover))
                 ui_game_moved(game_dir.name, str(dest))
             except PermissionError:
@@ -359,6 +402,7 @@ class FileManager:
                 try:
                     shutil.copytree(str(game_dir), str(dest), dirs_exist_ok=True)
                     shutil.rmtree(str(game_dir), ignore_errors=True)
+                    dest = self._unwrap_single_child_dir(dest)
                     moved.append((str(dest), is_cover))
                     ui_game_moved(game_dir.name, str(dest))
                 except Exception as e2:
@@ -369,6 +413,48 @@ class FileManager:
                 ui_game_move_fail(game_dir.name, str(e))
 
         return moved
+
+    def _unwrap_single_child_dir(self, dest: Path) -> Path:
+        """If dest is a wrapper containing exactly one subdirectory and no files,
+        promote the child up and remove the empty wrapper.
+
+        E.g.  E:\\game_save\\5209-PC\\Snow and the Woodcutter's Forest-PC\\...
+          =>  E:\\game_save\\Snow and the Woodcutter's Forest-PC\\...
+        """
+        try:
+            items = list(dest.iterdir())
+        except OSError:
+            return dest
+
+        dirs = [i for i in items if i.is_dir()]
+        files = [i for i in items if i.is_file()]
+
+        # Must have exactly 1 subdirectory and no standalone files
+        if len(dirs) != 1 or len(files) != 0:
+            return dest
+
+        child = dirs[0]
+        parent = dest.parent
+
+        # Don't unwrap if the child has the same name as the wrapper
+        if child.name == dest.name:
+            return dest
+
+        # Don't unwrap if a sibling with the child's name already exists
+        target = parent / child.name
+        if target.exists():
+            logger.info(f"跳过包装目录提升（目标已存在）: {child.name}")
+            return dest
+
+        try:
+            shutil.move(str(child), str(target))
+            dest.rmdir()
+            logger.info(f"包装目录提升: {dest.name} -> {child.name}")
+            print_step("包装目录提升", f"{dest.name} → {child.name}")
+            return target
+        except Exception as e:
+            logger.warning(f"包装目录提升失败: {e}")
+            return dest
 
     def _rename_generic_game_dir(self, game_dir: Path, archive_name: str) -> Path:
         generic_names = {"data", "output", "extract", "temp", "release", "game"}
@@ -393,14 +479,31 @@ class FileManager:
 
     def handle_post_process(self, result, cover_callback=None):
         if not self._settings.post_process.enabled:
-            return {}
+            return {}, []
 
         result_info = {}
         moved_games = []
 
         if result.success and result.extract_dir:
             logger.info(f"开始后处理: extract_dir={result.extract_dir}, file_name={result.file_name}")
-            game_dirs = self.detect_game_directory(result.extract_dir)
+            iso_summary = expand_disc_images_in_directory(result.extract_dir)
+            has_iso_expanded = bool(iso_summary.get("expanded"))
+            if has_iso_expanded:
+                result_info["iso_expanded"] = iso_summary["expanded"]
+            if iso_summary.get("errors"):
+                result_info["iso_errors"] = iso_summary["errors"]
+            # Only search for installer when ISO images were actually expanded.
+            # Regular game archives may contain setup.exe but don't need
+            # manual install guidance — they are already playable.
+            if has_iso_expanded:
+                installer = find_installer_exe(Path(result.extract_dir))
+                if installer is not None:
+                    result_info["installer_exe"] = str(installer)
+                    logger.info(f"检测到安装程序(光盘镜像): {installer}")
+            result_info["game_save_dir"] = self._settings.directories.game_save
+            if result.file_name:
+                result_info["archive_file_name"] = result.file_name
+            game_dirs = self.detect_game_directory(result.extract_dir, has_iso_expanded=has_iso_expanded)
             logger.info(f"检测到游戏目录: {game_dirs}")
             if game_dirs:
                 renamed_dirs = []
@@ -466,3 +569,24 @@ class FileManager:
     def _resolve_conflict(dest: Path) -> Path:
         # 不做后缀追加，由 move_game_to_save_dir 负责删除覆盖
         return dest
+
+    def _cleanup_empty_parent_dirs(self, file_path: str | Path) -> None:
+        """Remove empty parent directories left behind after archiving a file."""
+        p = Path(file_path).resolve()
+        for parent in p.parents:
+            # Stop at known system directories (watch root, etc.)
+            try:
+                if parent == parent.parent:
+                    break
+            except ValueError:
+                break
+            try:
+                if not parent.is_dir():
+                    break
+                items = list(parent.iterdir())
+                if items:
+                    break
+                parent.rmdir()
+                logger.info(f"已清理空目录: {parent}")
+            except OSError:
+                break

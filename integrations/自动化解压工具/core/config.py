@@ -15,14 +15,14 @@ class AppConfig(BaseModel):
 
 
 class DirectoriesConfig(BaseModel):
-    watch: str = r"D:\Download\galgame"
+    watch: str = ""
     target: str = "./"
     archive: str = "./data/archive"
     failed: str = "./data/failed"
     temp: str = "./data/temp"
     logs: str = "./data/logs"
     upload: str = "./data/upload"
-    game_save: str = r"E:\private\galgame"
+    game_save: str = ""
 
 
 class SevenZipConfig(BaseModel):
@@ -68,11 +68,21 @@ class GameDetectionConfig(BaseModel):
     min_size_mb: int = 50
 
 
+class IsoImagesConfig(BaseModel):
+    """After RAR/7z unpack: expand ISO (+MDS sidecar) into installable files."""
+
+    enabled: bool = True
+    try_mount_fallback: bool = True
+    move_iso_to_subfolder: bool = True
+    disc_subfolder: str = "_disc_images"
+
+
 class PostProcessConfig(BaseModel):
     enabled: bool = True
     move_game_dir: bool = True
     delete_archive: bool = False
     game_detection: GameDetectionConfig = Field(default_factory=GameDetectionConfig)
+    iso_images: IsoImagesConfig = Field(default_factory=IsoImagesConfig)
 
 
 class LoggingConfig(BaseModel):

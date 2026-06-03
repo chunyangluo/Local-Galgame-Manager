@@ -1,6 +1,18 @@
 # Changelog
 
+## v2.0.12
+- **解压类型分类处理**：`INSTALLER_NAMES` 移除 `launcher.exe`/`start.exe`（常见游戏启动器，非安装程序）；`detect_game_directory()` 仅在 ISO 展开后走安装程序检测路径，普通游戏不再被误标为"安装盘"；`guide_from_post_process()` 仅在 ISO 镜像展开时才触发安装引导，普通压缩包不再弹出 setup.exe 提示。
+- **嵌套解压 ISO 感知**：`expand_disc_images_in_directory()` 检测嵌套解压中已展开的 ISO（`_disc_images/` 子目录），确保光盘安装提示正确触发。
+- **善后优化**：归档/失败迁移后自动清理空父目录；游戏入库后自动提升单层包装目录（如 `5209-PC/Snow...` → `Snow...`）。
+- **功能自检增强**：新增 5 项自检（path_utils、auto_extract_integration、iso_handler_basics、disc_install_guide、archive_detector），总计 **11** 项；pytest **191** 项全通过。
+- **打包依赖修复**：`build.ps1` 从 `--hidden-import` 改为 `--collect-all`；`requirements.txt` 新增 `pydantic-settings`、`fastapi`、`uvicorn`、`python-multipart`。
+- **配置默认值**：`DirectoriesConfig` 默认值改为空字符串，由 `auto_extract_service` 提供合理默认路径。
+
 ## v2.0.11
+- **自动化解压增强**：RAR5 / 路径含 `[]` 回退系统 7-Zip 或 UnRAR；**ISO+MDS** 展开与 **setup.exe 安装引导**（建议子目录安装、整理散落安装）；桥接主程序事件与黄色操作面板。
+- **隐藏游戏**：`Ctrl+H` 与右键隐藏；「更多」→「显示隐藏游戏」（默认关，重启不记忆）。
+- **FDM**：工具箱 →「FDM 下载管理…」，配置 `fdm.exe`、打开 FDM、`--add` 添加任务。
+- **托盘退出**：主窗口 × 最小化到托盘；托盘「退出程序」正确结束进程（`setQuitOnLastWindowClosed(False)`）。
 - **自动化解压集成**：`integrations/自动化解压工具` 接入主程序；「更多」→「自动化解压工具…」支持目录配置（简洁/详细）、单次解压、扫描并解压（进度条、分文件反馈、可停止）、彩色日志与完成 Toast。
 - **主界面体验**：工具栏分为「搜索与筛选 / 导入管理 / 视图与浏览」；统一主操作/辅助按钮样式；搜索历史下拉、游玩状态筛选与排序；分页显示总数/页码并支持跳转。
 - **封面与卡片**：统一「暂无封面」占位、hover 提示与点击添加；联网拉取时卡片进度态；游玩次数/收藏 tooltip。

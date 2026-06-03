@@ -58,6 +58,11 @@ class FeatureSelfTester:
             _run_check("plugin_pipeline", self._check_plugin_pipeline),
             _run_check("cover_manager_custom_cover", self._check_cover_manager),
             _run_check("vndb_normalization", self._check_vndb_normalization),
+            _run_check("path_utils", self._check_path_utils),
+            _run_check("auto_extract_integration", self._check_auto_extract),
+            _run_check("iso_handler_basics", self._check_iso_handler),
+            _run_check("disc_install_guide", self._check_disc_install_guide),
+            _run_check("archive_detector", self._check_archive_detector),
         ]
         if self.with_network:
             checks.append(_run_check("vndb_network_search", self._check_vndb_network))
@@ -69,6 +74,8 @@ class FeatureSelfTester:
         if self.keep_temp:
             return
         self._tmp.cleanup()
+
+    # ── original checks ──
 
     def _check_database_basic(self) -> str:
         db = Database(self.data_dir)
@@ -169,6 +176,163 @@ class FeatureSelfTester:
         if QApplication.instance() is app:
             app.processEvents()
         return "main_window_init_ok"
+
+    # ── new checks ──
+
+    def _check_path_utils(self) -> str:
+        from app.services.path_utils import normalize_game_dir, is_path_under_root
+
+        norm = normalize_game_dir("C:/Games/My  Game")
+        if not norm:
+            raise RuntimeError("normalize_game_dir returned empty")
+        under = is_path_under_root("C:/Games/MyGame", "C:/Games")
+        if not under:
+            raise RuntimeError("is_path_under_root failed for valid sub-path")
+        not_under = is_path_under_root("D:/Other", "C:/Games")
+        if not_under:
+            raise RuntimeError("is_path_under_root true for different drive")
+        return f"normalize_ok=True, under_root_ok=True"
+
+    def _check_auto_extract(self) -> str:
+        from app.services.auto_extract_service import (
+            is_auto_extract_available,
+            read_directory_config,
+        )
+
+        available = is_auto_extract_available()
+        if not available:
+            raise RuntimeError("AutoExtract integration not available")
+        config = read_directory_config()
+        keys = list(config.keys())
+        if not keys:
+            raise RuntimeError("read_directory_config returned empty dict")
+        return f"available=True, config_keys={keys[:5]}"
+
+    def _check_iso_handler(self) -> str:
+        import sys
+        from app.services.paths import auto_extract_tool_dir
+
+        tool_dir = auto_extract_tool_dir()
+        if tool_dir is None:
+            raise RuntimeError("auto_extract_tool_dir returned None")
+        tool_str = str(tool_dir)
+        if tool_str not in sys.path:
+            sys.path.insert(0, tool_str)
+
+        from core.iso_handler import (
+            find_iso_files,
+            find_installer_exe,
+            is_disc_sidecar,
+            INSTALLER_NAMES,
+        )
+
+        # Verify INSTALLER_NAMES does not contain common game launchers
+        bad = {"launcher.exe", "start.exe"}
+        overlap = INSTALLER_NAMES & bad
+        if overlap:
+            raise RuntimeError(
+                f"INSTALLER_NAMES contains game launchers (should be removed): {overlap}"
+            )
+
+        # find_iso_files on empty dir should return []
+        empty = self.base / "iso_test_empty"
+        empty.mkdir(exist_ok=True)
+        found = find_iso_files(empty)
+        if found:
+            raise RuntimeError("find_iso_files found ISOs in empty directory")
+
+        # find_installer_exe on dir without installer should return None
+        no_inst = self.base / "no_installer"
+        no_inst.mkdir(exist_ok=True)
+        (no_inst / "game.exe").write_bytes(b"\x00")
+        inst = find_installer_exe(no_inst)
+        if inst is not None:
+            raise RuntimeError(
+                f"find_installer_exe incorrectly found installer: {inst}"
+            )
+
+        # find_installer_exe on dir with setup.exe should find it
+        with_inst = self.base / "with_setup"
+        with_inst.mkdir(exist_ok=True)
+        (with_inst / "setup.exe").write_bytes(b"\x00")
+        inst2 = find_installer_exe(with_inst)
+        if inst2 is None:
+            raise RuntimeError("find_installer_exe missed setup.exe")
+
+        # is_disc_sidecar (single-arg: checks suffix)
+        assert is_disc_sidecar(Path("game.mds"))
+        assert is_disc_sidecar(Path("game.cue"))  # .cue is a disc sidecar
+        assert not is_disc_sidecar(Path("game.txt"))
+        return f"installer_names={INSTALLER_NAMES}, sidecar_ok=True"
+
+    def _check_disc_install_guide(self) -> str:
+        from app.services.disc_install_guide import guide_from_post_process
+
+        # Non-ISO archive should NOT trigger guide even with installer_exe
+        guide1 = guide_from_post_process(
+            {"expanded": [], "installer_exe": "D:/game/setup.exe"}
+        )
+        if guide1 is not None:
+            raise RuntimeError(
+                f"guide_from_post_process should return None for non-ISO, got: {guide1}"
+            )
+
+        # ISO expanded with installer should trigger guide
+        guide2 = guide_from_post_process(
+            {"iso_expanded": ["game.iso"], "installer_exe": "D:/game/setup.exe"}
+        )
+        if guide2 is None:
+            raise RuntimeError(
+                "guide_from_post_process should return guide for ISO+installer"
+            )
+
+        # ISO expanded without installer still triggers guide (user needs to
+        # know this is a disc image and may need manual install)
+        guide3 = guide_from_post_process({"iso_expanded": ["game.iso"]})
+        if guide3 is None:
+            raise RuntimeError(
+                "guide_from_post_process should return guide for ISO-only"
+            )
+
+        # Neither ISO nor installer should return None
+        guide4 = guide_from_post_process({"expanded": []})
+        if guide4 is not None:
+            raise RuntimeError(
+                "guide_from_post_process should return None when no ISO and no installer"
+            )
+        return "iso_plus_installer=guide, iso_only=guide, no_iso_no_guide=True"
+
+    def _check_archive_detector(self) -> str:
+        import sys
+        from app.services.paths import auto_extract_tool_dir
+
+        tool_dir = auto_extract_tool_dir()
+        if tool_dir is None:
+            raise RuntimeError("auto_extract_tool_dir returned None")
+        tool_str = str(tool_dir)
+        if tool_str not in sys.path:
+            sys.path.insert(0, tool_str)
+
+        from core.archive_detector import detect_by_extension
+
+        # Test extension-based detection (doesn't need real files)
+        cases = {
+            "game.7z": "7z",
+            "game.rar": "rar",
+            "game.zip": "zip",
+            "game.iso": "iso",
+        }
+        for filename, expected in cases.items():
+            result = detect_by_extension(Path(filename))
+            if result != expected:
+                raise RuntimeError(f"Expected {expected} for {filename}, got {result}")
+
+        # .exe and .txt should not be detected by extension alone
+        r_exe = detect_by_extension(Path("game.exe"))
+        if r_exe is not None:
+            raise RuntimeError(f"Expected None for .exe extension, got {r_exe}")
+
+        return "7z/rar/zip/iso=all_correct"
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -96,6 +96,51 @@ _FULLWIDTH_MAP = str.maketrans(
     " 0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz!?~-",
 )
 
+
+def _fix_mojibake(text: str) -> str:
+    """Attempt to fix mojibake caused by decoding Shift-JIS as GBK/CP936.
+
+    When a Japanese game archive is extracted on Chinese Windows, the
+    extraction tool may decode Shift-JIS filenames as GBK, producing
+    garbled characters stored in NTFS.  This function detects such
+    double-encoding by re-encoding the text as GBK and decoding as
+    Shift-JIS; if the result contains valid Japanese characters and
+    fewer replacement characters, it is returned instead.
+    """
+    if not text:
+        return text
+
+    # Quick check: if text already contains common Japanese characters,
+    # it's probably fine.
+    jp_chars = set("あいうえおかきくけこさしすせそたちつてとなにぬねのはひふへほまみむめもやゆよらりるれろわをん")
+    if any(c in jp_chars for c in text):
+        return text
+
+    try:
+        raw_bytes = text.encode("gbk", errors="strict")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return text
+
+    try:
+        fixed = raw_bytes.decode("shift_jis", errors="strict")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        try:
+            fixed = raw_bytes.decode("cp932", errors="strict")
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            return text
+
+    # Validate: the fixed version should contain Japanese characters
+    # and fewer replacement characters than the original.
+    if fixed == text:
+        return text
+
+    # Check if fixed version has Japanese hiragana/katakana/kanji
+    has_jp = any("\u3040" <= c <= "\u30FF" or "\u4E00" <= c <= "\u9FFF" for c in fixed)
+    if not has_jp:
+        return text
+
+    return fixed
+
 @dataclass
 class ScanResult:
     game_name: str
@@ -309,7 +354,9 @@ class GameScanner:
         return any(token in lower_name for token in SKIP_DIRECTORY_KEYWORDS)
 
     def _normalize_name(self, value: str) -> str:
-        return re.sub(r"[^a-z0-9\u4e00-\u9fff\u3040-\u30ff]+", "", value.lower())
+        # Keep: lowercase letters, digits, CJK unified, CJK extension A,
+        # hiragana, katakana, halfwidth katakana
+        return re.sub(r"[^a-z0-9\u4e00-\u9fff\u3400-\u4dbf\u3040-\u30ff\uff65-\uff9f]+", "", value.lower())
 
     def _extract_group_count(self, directory_name: str) -> int:
         match = re.search(r"\((\d+)\)\s*$", directory_name)
@@ -377,6 +424,10 @@ class GameScanner:
 
     def _resolve_game_name(self, directory: Path) -> str:
         raw_name = directory.name
+        # Fix mojibake: if the directory name was decoded with the wrong
+        # encoding (e.g. Shift-JIS filename decoded as GBK/CP936 on Chinese
+        # Windows), try to recover the original characters.
+        raw_name = _fix_mojibake(raw_name)
         # 全角→半角统一
         normalized = raw_name.translate(_FULLWIDTH_MAP)
         # 后缀过滤

@@ -26,6 +26,8 @@ from core.logger import (
     format_size, format_duration,
     print_step, print_error,
 )
+from core.archive_runner import run_extract_with_fallback
+from core.iso_handler import expand_disc_images_in_directory, is_disc_image_staging_dir
 from core.password_manager import PasswordManager
 
 
@@ -449,19 +451,21 @@ class Extractor:
     def _build_extract_cmd(
         self, archive_path: str, output_dir: str, password: Optional[str] = None
     ) -> list[str]:
-        cmd = [self._get_7z_path(), "x", archive_path, f"-o{output_dir}", "-aoa", "-y"]
-        if password is not None:
-            cmd.append(f"-p{password}")
-        else:
-            # password 为 None 时使用空密码（-p 不带参数）
-            cmd.append("-p")
-        return cmd
+        from core.archive_runner import build_extract_cmd
+
+        return build_extract_cmd(
+            self._get_7z_path(), archive_path, output_dir, password
+        )
 
     def _run_extract(
         self, archive_path: str, output_dir: str, password: Optional[str] = None
     ) -> tuple[bool, str]:
-        cmd = self._build_extract_cmd(archive_path, output_dir, password)
-        return self._run_extract_with_cmd(cmd)
+        ok, err, engine = run_extract_with_fallback(
+            self._get_7z_path(), archive_path, output_dir, password
+        )
+        if ok and engine and engine not in ("7za.exe", "7za"):
+            logger.info(f"使用备用解压引擎: {engine}")
+        return ok, err
     
     def _run_extract_with_cmd(
         self, cmd: list[str]
@@ -938,6 +942,16 @@ class Extractor:
     ) -> list[ExtractResult]:
         results = []
         extract_path = Path(extract_dir)
+
+        if self._settings.post_process.iso_images.enabled and is_disc_image_staging_dir(
+            extract_path
+        ):
+            iso_summary = expand_disc_images_in_directory(extract_path, self._settings)
+            if iso_summary.get("expanded"):
+                print_step(
+                    "嵌套层光盘镜像已展开",
+                    ", ".join(iso_summary["expanded"]),
+                )
         
         # 检测是否是真正的游戏目录（不是全是压缩包的目录）
         _android_markers = {"AndroidManifest.xml", "classes.dex", "resources.arsc"}
@@ -1261,8 +1275,14 @@ class Extractor:
     }
 
     def _should_skip_nested(self, item: Path, archive_type: str) -> bool:
+        if archive_type == "iso":
+            return False
+
         name_lower = item.name.lower()
         stem_lower = item.stem.lower()
+
+        if is_disc_image_staging_dir(item.parent) and item.suffix.lower() == ".iso":
+            return False
 
         for skip in self.NESTED_SKIP_NAMES:
             if skip in stem_lower or skip in name_lower:

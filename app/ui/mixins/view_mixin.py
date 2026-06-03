@@ -45,6 +45,7 @@ class ViewMixin:
             query=self.search_input.text(),
             play_state=play_state,
             sort_by=sort_by,
+            exclude_hidden=not getattr(self, "show_hidden_games", False),
         )
         self._refresh_library_view()
         self._update_empty_state()
@@ -64,7 +65,12 @@ class ViewMixin:
                 on_add_cover=lambda gid: self.set_custom_cover_for_game_id(gid),
             )
             n = len(self.filtered_games)
-            self.status.setText(f"共 {n} / {len(self.games_cache)} 个游戏")
+            total = len(self.games_cache)
+            hidden = total - n
+            if hidden > 0 and not self.show_hidden_games:
+                self.status.setText(f"共 {n} 个游戏（{hidden} 个已隐藏）")
+            else:
+                self.status.setText(f"共 {n} 个游戏")
         else:
             self._library_stack.setCurrentWidget(self.games_list)
             self._start_incremental_render()
@@ -76,7 +82,12 @@ class ViewMixin:
         self._render_index = 0
         self._render_total = len(self.filtered_games)
         if self._render_total == 0:
-            self.status.setText(f"共 0 / {len(self.games_cache)} 个游戏")
+            total = len(self.games_cache)
+            hidden = total - len(self.filtered_games)
+            if hidden > 0 and not self.show_hidden_games:
+                self.status.setText(f"共 0 个游戏（{hidden} 个已隐藏）")
+            else:
+                self.status.setText(f"共 0 个游戏")
             return
         self.status.setText(f"正在渲染 0/{self._render_total} ...")
         self._render_next_batch()
