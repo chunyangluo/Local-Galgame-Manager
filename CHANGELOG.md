@@ -1,5 +1,18 @@
 # Changelog
 
+## v2.2.0
+- **BUG 修复**：启动失败时仅移除失败游戏的启动状态，不再误清所有游戏的 `_launching_game_ids`。
+- **BUG 修复**：VNDB 限速器改为释放锁后再 sleep，修复多线程串行化问题，批量导入恢复真正并发。
+- **BUG 修复**：`read_image_size_fast` 添加文件访问异常保护，防止文件被删除或权限变化时封面搜索崩溃。
+- **BUG 修复**：`_merge_metadata` 添加 `fetchone()` 返回 None 检查，防止并发删除游戏时迁移事务崩溃。
+- **BUG 修复**：`_collect_image_candidates` 中 `rglob` 添加权限错误保护，防止无权限子目录导致封面搜索崩溃。
+- **界面优化**：全局样式表补全 `QScrollBar:horizontal`、`QToolTip`、`QSlider`、`QSpinBox`、`QDateEdit` 等控件样式。
+- **界面优化**：主题管理器同步补全，浅色/深色主题自动适配新增控件。
+- **界面优化**：进度条填充改为渐变色，视觉层次更丰富。
+- **界面优化**：移除 `game_detail_dialog`、`delete_game_confirm_dialog`、`save_manager_window` 等对话框中的硬编码颜色，统一由全局主题控制。
+- **界面优化**：卡片占位图渐变增加色阶，过渡更自然。
+- **测试**：pytest **191** 项全通过；功能自检 **11** 项全通过。
+
 ## v2.0.12
 - **解压类型分类处理**：`INSTALLER_NAMES` 移除 `launcher.exe`/`start.exe`（常见游戏启动器，非安装程序）；`detect_game_directory()` 仅在 ISO 展开后走安装程序检测路径，普通游戏不再被误标为"安装盘"；`guide_from_post_process()` 仅在 ISO 镜像展开时才触发安装引导，普通压缩包不再弹出 setup.exe 提示。
 - **嵌套解压 ISO 感知**：`expand_disc_images_in_directory()` 检测嵌套解压中已展开的 ISO（`_disc_images/` 子目录），确保光盘安装提示正确触发。

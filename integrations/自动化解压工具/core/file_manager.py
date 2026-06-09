@@ -307,7 +307,7 @@ class FileManager:
         game_root = find_game_root(target)
         if is_disc_storage_dir(game_root):
             return []
-        
+
         # 如果游戏根目录就是 target 本身，检查子目录
         if game_root == target:
             subdirs = [
@@ -318,27 +318,32 @@ class FileManager:
             if len(subdirs) == 1:
                 game_root = find_game_root(subdirs[0])
             elif len(subdirs) > 1:
-                # 多个子目录，选有exe的或最大的
-                best = None
-                best_score = -1
+                # 多个子目录：每个都可能是独立游戏（例如同一压缩包包含
+                # 游戏本体 + 编辑器），返回所有有效目录而非只选"最佳"
+                valid_dirs: list[Path] = []
                 for d in subdirs:
                     if is_disc_storage_dir(d):
                         continue
                     root = find_game_root(d)
-                    size = self._quick_dir_size(root)
+                    if is_android_dir(root):
+                        continue
+                    dsize = self._quick_dir_size(root)
                     has_exe = any(f.suffix.lower() == ".exe" for f in root.iterdir() if f.is_file())
-                    score = (1000 if has_exe else 0) + size
-                    if score > best_score:
-                        best_score = score
-                        best = root
-                if best:
-                    game_root = best
+                    has_game_data = any(f.suffix.lower() in game_engine_ext for f in root.iterdir() if f.is_file())
+                    if dsize >= min_size_bytes or has_exe or has_game_data:
+                        ui_game_found(root.name, dsize / 1024 / 1024)
+                        logger.info(f"游戏根目录(多选): {root.name} ({dsize/1024/1024:.1f}MB)")
+                        valid_dirs.append(root)
+                if valid_dirs:
+                    return valid_dirs
+                # fallback: 没有有效目录
+                return []
 
         # 最终校验：排除安卓目录和太小的目录
         if is_android_dir(game_root):
             logger.info(f"排除安卓目录: {game_root.name}")
             return []
-        
+
         size = self._quick_dir_size(game_root)
         if size < min_size_bytes:
             has_exe = any(f.suffix.lower() == ".exe" for f in game_root.iterdir() if f.is_file())
@@ -349,7 +354,7 @@ class FileManager:
 
         ui_game_found(game_root.name, size / 1024 / 1024)
         logger.info(f"游戏根目录: {game_root.name} ({size/1024/1024:.1f}MB)")
-        
+
         return [game_root]
 
     def move_game_to_save_dir(self, game_dirs, cover_callback=None):

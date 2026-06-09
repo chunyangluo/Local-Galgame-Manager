@@ -287,7 +287,7 @@ class MainWindow(
         self._style_more_menu(menu)
         icon = self._more_menu_icon
 
-        # ── 高频：目录 / 库 / 用户 / 游戏 ──
+        # ── 高频：目录 / 数据管理 ──
         self.act_manage_roots = self._add_more_action(
             menu,
             "管理目录…",
@@ -295,52 +295,52 @@ class MainWindow(
             icon=icon(QStyle.StandardPixmap.SP_DirIcon),
             tooltip="查看、删除或清空已添加的扫描目录",
         )
-        self._add_more_action(
-            menu,
-            "数据管理…",
-            self._open_game_data_manager,
-            icon=icon(QStyle.StandardPixmap.SP_FileDialogDetailedView),
-            tooltip="查看库内游戏列表，从库中删除条目（不卸载安装目录）",
+
+        # 数据管理子菜单（合并：数据管理 + 新建用户 + 导出/恢复备份）
+        data_menu = menu.addMenu(
+            icon(QStyle.StandardPixmap.SP_FileDialogDetailedView),
+            "📁 数据管理",
         )
-        self._add_more_action(
-            menu,
+        self._style_more_menu(data_menu)
+        data_menu.addAction(
+            icon(QStyle.StandardPixmap.SP_FileDialogDetailedView),
+            "游戏列表管理…",
+            self._open_game_data_manager,
+        )
+        data_menu.addAction(
+            icon(QStyle.StandardPixmap.SP_ComputerIcon),
             "新建用户",
             self._add_user,
-            icon=icon(QStyle.StandardPixmap.SP_ComputerIcon),
-            tooltip="创建并切换到新的本地用户",
         )
-        self._add_more_action(
-            menu,
+        data_menu.addSeparator()
+        data_menu.addAction(
+            icon(QStyle.StandardPixmap.SP_DialogSaveButton),
             "导出备份",
             self._backup,
-            icon=icon(QStyle.StandardPixmap.SP_DialogSaveButton),
-            tooltip="备份游戏库与设置到 zip",
         )
-        self._add_more_action(
-            menu,
+        data_menu.addAction(
+            icon(QStyle.StandardPixmap.SP_DialogOpenButton),
             "恢复备份",
             self._restore,
-            icon=icon(QStyle.StandardPixmap.SP_DialogOpenButton),
-            tooltip="从备份 zip 恢复数据",
         )
 
-        self.act_startup = QAction("开机启动: OFF", self)
+        # ── 开关项（统一图标 + 状态样式）──
+        menu.addSeparator()
+
+        self.act_startup = QAction("▶️ 开机启动: OFF", self)
         self.act_startup.setCheckable(True)
-        self.act_startup.setIcon(icon(QStyle.StandardPixmap.SP_MediaPlay))
         self.act_startup.triggered.connect(self._toggle_startup)
         self.act_startup.setToolTip("点击切换：是否随 Windows 登录自动启动")
         menu.addAction(self.act_startup)
 
-        self.act_auto_backup = QAction("启动前备份: OFF", self)
+        self.act_auto_backup = QAction("💾 启动前备份: OFF", self)
         self.act_auto_backup.setCheckable(True)
-        self.act_auto_backup.setIcon(icon(QStyle.StandardPixmap.SP_DialogYesButton))
         self.act_auto_backup.triggered.connect(self._toggle_auto_backup_before_launch)
         self.act_auto_backup.setToolTip("点击切换：启动游戏前自动备份存档目录")
         menu.addAction(self.act_auto_backup)
 
-        self.act_show_hidden = QAction("显示隐藏游戏: OFF", self)
+        self.act_show_hidden = QAction("👁 显示隐藏游戏: OFF", self)
         self.act_show_hidden.setCheckable(True)
-        self.act_show_hidden.setIcon(icon(QStyle.StandardPixmap.SP_DialogNoButton))
         self.act_show_hidden.triggered.connect(self._toggle_show_hidden_games)
         self.act_show_hidden.setToolTip("点击切换：是否在列表中显示已隐藏的游戏（重启后默认不显示）")
         menu.addAction(self.act_show_hidden)
@@ -351,13 +351,6 @@ class MainWindow(
 
         menu.addSeparator()
 
-        self._add_more_action(
-            menu,
-            "游戏详情…",
-            self._open_selected_game_detail,
-            icon=icon(QStyle.StandardPixmap.SP_FileIcon),
-            tooltip="完整元数据、游玩记录、文件夹与调试信息",
-        )
         self._add_more_action(
             menu,
             "游玩历史…",
@@ -428,14 +421,7 @@ class MainWindow(
             "⚙ 设置…",
             self._open_settings,
             icon=icon(QStyle.StandardPixmap.SP_FileDialogContentsView),
-            tooltip="综合设置：启动方式、备份、封面等",
-        )
-        self._add_more_action(
-            menu,
-            "🎨 界面设置…",
-            self._open_theme_settings,
-            icon=icon(QStyle.StandardPixmap.SP_DesktopIcon),
-            tooltip="自定义主题、字体、颜色",
+            tooltip="综合设置：启动、封面、外观、工具路径等",
         )
 
         return menu
@@ -533,6 +519,13 @@ class MainWindow(
         act_scan_and_vndb.setToolTip("先扫描目录，扫描完成后自动执行VNDB批量导入")
         scan_menu.addAction(act_scan_and_vndb)
 
+        scan_menu.addSeparator()
+
+        act_incremental_scan_and_vndb = QAction("增量扫描并增量VNDB导入", self)
+        act_incremental_scan_and_vndb.triggered.connect(self._scan_incremental_and_vndb_import)
+        act_incremental_scan_and_vndb.setToolTip("只扫描新增游戏并自动执行增量VNDB导入（最快）")
+        scan_menu.addAction(act_incremental_scan_and_vndb)
+
         self.btn_scan.setMenu(scan_menu)
         import_row.addWidget(self.btn_scan)
         self._polish_toolbar_control(self.btn_scan)
@@ -550,6 +543,14 @@ class MainWindow(
         self.btn_refresh.setToolTip("重新从数据库加载列表与筛选结果")
         import_row.addWidget(self.btn_refresh)
         self._polish_toolbar_control(self.btn_refresh)
+
+        self.btn_quick_workflow = QPushButton("🚀 一键工作流")
+        self.btn_quick_workflow.setProperty("btnKind", "primary")
+        self.btn_quick_workflow.clicked.connect(self._open_quick_workflow)
+        self.btn_quick_workflow.setToolTip("一键执行：自动解压 → 增量扫描 → 增量 VNDB 导入")
+        import_row.addWidget(self.btn_quick_workflow)
+        self._polish_toolbar_control(self.btn_quick_workflow)
+
         toolbar.addWidget(import_frame)
 
         # 视图与浏览区
@@ -720,7 +721,11 @@ class MainWindow(
     def _refresh_startup_state(self) -> None:
         enabled = self.system_service.is_startup_enabled()
         self.act_startup.setChecked(enabled)
-        self.act_startup.setText(f"开机启动: {'ON' if enabled else 'OFF'}")
+        tag = "ON" if enabled else "OFF"
+        self.act_startup.setText(f"▶️ 开机启动: {tag}")
+        self.act_startup.setToolTip(
+            f"当前: {'已开启' if enabled else '已关闭'} — 点击切换"
+        )
 
     def _refresh_user_picker(self) -> None:
         users = self.db.list_users()
@@ -999,13 +1004,12 @@ class MainWindow(
     
     def _resolve_project_dir(self) -> Path:
         """Program / repository root for opening in the file manager."""
+        if getattr(sys, "frozen", False):
+            return Path(sys.executable).resolve().parent
         from app.services.paths import dev_repo_root
-
         root = dev_repo_root()
         if root is not None:
             return root
-        if getattr(sys, "frozen", False):
-            return Path(sys.executable).resolve().parent
         return Path(__file__).resolve().parent.parent.parent
 
     def _show_help(self) -> None:
@@ -1023,7 +1027,7 @@ class MainWindow(
         shortcut_row = QHBoxLayout()
         btn_open_project = QPushButton("📁 打开项目目录")
         btn_open_project.setToolTip(
-            f"在资源管理器中打开程序所在目录\n{project_dir}"
+            f"在资源管理器中打开项目根目录\n{project_dir}"
         )
         btn_open_data = QPushButton("💾 打开数据目录")
         btn_open_data.setToolTip(
@@ -1059,13 +1063,13 @@ class MainWindow(
             .shortcut { background: #2E3644; padding: 2px 6px; border-radius: 3px; font-family: monospace; }
             .version { color: #8AB4E0; font-size: 13px; margin-bottom: 8px; }
         </style>
-        <p class="version"><b>本地 Galgame 管理器 v2.0.12</b></p>
+        <p class="version"><b>本地 Galgame 管理器 v2.2.0</b></p>
 
         <h2>快速入门</h2>
         <ol>
             <li><b>添加目录</b> — 「导入管理」→「添加目录」，选择游戏根目录</li>
             <li><b>导入游戏</b> — 「导入游戏」→「全量扫描」或「扫描并 VNDB 导入」</li>
-            <li><b>启动游戏</b> — 双击卡片；右键可选 LE 转区 / 管理员启动</li>
+            <li><b>启动游戏</b> — 双击卡片；右键可选 LE 转区 / 管理员启动 / 调试启动</li>
         </ol>
 
         <h2>工具栏（分组）</h2>
@@ -1078,34 +1082,57 @@ class MainWindow(
         <h3>导入管理</h3>
         <ul>
             <li><b>添加目录</b> — 加入扫描范围</li>
-            <li><b>导入游戏</b> — 全量扫描、增量扫描、扫描并 VNDB 导入</li>
+            <li><b>导入游戏</b> — 全量扫描、增量扫描、扫描并 VNDB 导入、增量扫描并增量 VNDB 导入（最快）</li>
             <li><b>VNDB 导入</b> — 对现有库补全元数据与封面</li>
             <li><b>刷新</b> — 重新加载列表与筛选结果</li>
+            <li><b>🚀 一键工作流</b> — 自动解压 → 增量扫描 → 增量 VNDB 导入，全流程一键完成</li>
         </ul>
         <h3>视图与浏览</h3>
         <ul>
             <li><b>网格 / 列表</b> — 切换视图；底部分页显示总数与页码，可跳转</li>
             <li><b>🎲 随机</b> — 从当前列表随机选一款，支持「换一个」</li>
             <li><b>📜 历史记录</b> — 游玩历史独立窗口</li>
-            <li><b>📋 日志</b> — 查看运行日志</li>
+            <li><b>📋 日志</b> — 查看运行日志（含标准日志桥接，可打开日志目录）</li>
         </ul>
 
         <h2>「更多」菜单</h2>
         <ul>
-            <li><b>管理目录 / 数据管理</b> — 扫描路径与从库删除游戏</li>
-            <li><b>导出 / 恢复备份</b> — 库与设置 zip 备份</li>
-            <li><b>开机启动 / 启动前备份 / 显示隐藏游戏</b> — 可点击切换 ON/OFF（显示隐藏默认关，重启不记忆）</li>
-            <li><b>游戏详情 / 游玩历史</b> — 元数据与记录</li>
-            <li><b>🔧 工具箱</b> — HBE、自动化解压、插件、LE、2DFan、FDM 下载管理</li>
-            <li><b>⚙ 设置 / 🎨 界面设置</b> — 启动方式、封面策略、主题等</li>
+            <li><b>管理目录</b> — 扫描路径管理</li>
+            <li><b>📁 数据管理</b> — 子菜单：游戏列表管理、新建用户、导出/恢复备份</li>
+            <li><b>▶️ 开机启动 / 💾 启动前备份 / 👁 显示隐藏游戏</b> — 可点击切换 ON/OFF（显示隐藏默认关，重启不记忆）</li>
+            <li><b>游玩历史</b> — 独立窗口查看全部记录</li>
+            <li><b>🔧 工具箱</b> — HBE、自动化解压、FDM、插件、LE、2DFan</li>
+            <li><b>⚙ 设置</b> — 综合设置：启动、封面、外观、工具路径、高级</li>
         </ul>
 
         <h2>工具箱（简要）</h2>
         <ul>
             <li><b>HBE 解密</b> — 离线解密 Hexo Blog Encrypt HTML（单文件 / 批量）</li>
-            <li><b>自动化解压</b> — 监控目录、扫描解压（进度、可停止）；RAR5/ISO+MDS 等会自动选用合适工具；<b>仅光盘镜像（ISO+MDS）</b>展开后提示安装 setup.exe，普通压缩包不会弹出安装提示；解压后自动清理空目录、提升单层包装目录；建议安装到 <b>game_save 子目录</b>，勿装到游戏库根目录；误装根目录可用「整理散落安装」</li>
+            <li><b>自动化解压</b> — 监控目录、扫描解压（进度、可停止）；支持 RAR 多卷分包（part1/part2）、7z 分卷、SFX 分卷；RAR5/ISO+MDS 等会自动选用合适工具；<b>仅光盘镜像（ISO+MDS）</b>展开后提示安装 setup.exe；解压后自动生成验收报告</li>
             <li><b>FDM 下载管理</b> — 配置 Free Download Manager 路径，打开 FDM 或添加下载链接</li>
             <li><b>插件管理</b> — 扫描 / 启动链路上的扩展钩子</li>
+            <li><b>🔑 密码本</b> — 管理解压密码：添加、删除、置顶、调整优先级、查看使用统计</li>
+        </ul>
+
+        <h2>游戏启动</h2>
+        <ul>
+            <li><b>普通启动</b> — 双击或右键启动</li>
+            <li><b>LE 转区启动</b> — 右键选择，支持 per-game 配置（日语/简中/繁中/韩语）；游戏目录自带 LEProc.exe 时自动使用</li>
+            <li><b>管理员启动</b> — 右键选择</li>
+            <li><b>调试启动</b> — 右键或游戏详情中，捕获退出码和诊断建议</li>
+            <li><b>自动重试</b> — 普通启动失败自动尝试 LE，LE 失败自动尝试普通</li>
+            <li><b>exe 不存在自动修复</b> — 启动文件丢失时自动搜索替代 exe</li>
+            <li><b>启动失败一键重试</b> — 失败弹窗提供 LE/管理员/调试重试按钮</li>
+        </ul>
+
+        <h2>设置（综合）</h2>
+        <ul>
+            <li><b>启动</b> — 双击打开方式（普通/强制LE/智能）、启动前自动备份、上次启动模式查看与重置</li>
+            <li><b>封面</b> — 封面获取策略（仅本地/本地优先/网图优先）</li>
+            <li><b>外观</b> — 预设主题、强调色、字体、布局（紧凑/圆角）、效果（动画/阴影/透明度）、自定义颜色（高级）；修改即时预览</li>
+            <li><b>工具路径</b> — LEProc.exe、2DFan 线索库、FDM 下载器；每项支持「自动检测」</li>
+            <li><b>高级</b> — 缓存与缩略图清理、插件管理、扩展工具快捷入口、删除确认开关</li>
+            <li><b>搜索</b> — 设置对话框顶部搜索框，输入关键词快速定位设置项</li>
         </ul>
 
         <h2>托盘与退出</h2>
@@ -1116,7 +1143,7 @@ class MainWindow(
 
         <h2>右键菜单</h2>
         <ul>
-            <li><b>启动 / LE 转区 / 管理员启动</b></li>
+            <li><b>启动 / LE 转区 / 管理员启动 / 调试启动</b></li>
             <li><b>游戏详情 / 存档管理 / 收藏 / 隐藏</b></li>
             <li><b>编辑名称·路径 / 封面 / 分类 / 桌面快捷方式</b></li>
             <li><b>从库中删除</b> — 可选同时删除安装文件夹（二次确认）</li>
@@ -1132,22 +1159,21 @@ class MainWindow(
             <li><span class="shortcut">Ctrl+I</span> 打开游戏详情</li>
         </ul>
 
-        <h2>设置说明</h2>
-        <ul>
-            <li><b>双击打开方式</b> — 普通 / 强制 LE / 智能（记住上次）</li>
-            <li><b>封面策略</b> — 仅本地 / 本地优先 / 网图优先</li>
-            <li><b>LE 路径</b> — 「更多」→「工具箱」→「Locale 模拟器 (LE)…」</li>
-        </ul>
-
         <h2>常见问题</h2>
         <ul>
             <li><b>游戏未识别？</b> — 确认目录含 .exe，重新全量扫描</li>
-            <li><b>启动 exe 不对？</b> — 右键「编辑名称/路径」</li>
+            <li><b>启动 exe 不对？</b> — 右键「编辑名称/路径」；或启动时自动搜索替代 exe</li>
+            <li><b>游戏启动闪退？</b> — 使用「调试启动」查看退出码和诊断建议；或设置 LE 转区配置</li>
             <li><b>封面不显示？</b> — 调整封面策略或右键重新获取</li>
             <li><b>解压/扫描看似卡住？</b> — 查看进度条与日志；大压缩包、ISO 展开耗时较长属正常</li>
-            <li><b>隐藏的游戏找不到？</b> — 「更多」→ 开启「显示隐藏游戏」，或 <span class="shortcut">Ctrl+H</span> 取消隐藏</li>
+            <li><b>隐藏的游戏找不到？</b> — 「更多」→ 开启「👁 显示隐藏游戏」，或 <span class="shortcut">Ctrl+H</span> 取消隐藏</li>
             <li><b>关了窗口还在后台？</b> — 用托盘「退出程序」；仅关窗口是进托盘</li>
-            <li><b>LE 转区灰色？</b> — 先在工具箱中配置 LEProc.exe</li>
+            <li><b>LE 转区灰色？</b> — 在「更多」→「⚙ 设置」→「工具路径」中配置 LEProc.exe，或点击「自动检测」</li>
+            <li><b>归档目录占空间？</b> — 「更多」→「📁 数据管理」→「文件管理」→ 一键清空归档目录</li>
+            <li><b>想一键完成下载→解压→导入？</b> — 点击工具栏「🚀 一键工作流」</li>
+            <li><b>解压密码管理？</b> — 一键工作流或自动化解压界面中的「🔑 管理密码本」按钮</li>
+            <li><b>缓存占空间？</b> — 「更多」→「⚙ 设置」→「高级」→ 缓存与缩略图清理</li>
+            <li><b>开机启动设置失败？</b> — 需以管理员身份运行程序</li>
         </ul>
 
         <p style="color: #5A6474; margin-top: 16px;">

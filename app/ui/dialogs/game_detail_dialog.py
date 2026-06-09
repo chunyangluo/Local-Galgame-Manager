@@ -11,6 +11,7 @@ from PySide6.QtCore import Qt, QMimeData
 from PySide6.QtGui import QPixmap, QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QApplication,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QGroupBox,
@@ -33,6 +34,35 @@ if TYPE_CHECKING:
     from app.ui.main_window import MainWindow
 
 
+def launch_executable(exe_path: str | Path) -> None:
+    """Start an .exe with its install folder as working directory (legacy installers)."""
+    import os
+
+    exe = Path(exe_path).resolve()
+    if not exe.is_file():
+        raise FileNotFoundError(str(exe))
+    work_dir = str(exe.parent)
+    if sys.platform == "win32":
+        import ctypes
+
+        rc = ctypes.windll.shell32.ShellExecuteW(  # type: ignore[attr-defined]
+            None,
+            "open",
+            str(exe),
+            None,
+            work_dir,
+            1,
+        )
+        if int(rc) <= 32:
+            raise OSError(f"无法启动程序 (ShellExecute 错误码 {int(rc)})")
+    else:
+        env = os.environ.copy()
+        env["PATH"] = work_dir + os.pathsep + env.get("PATH", "")
+        import subprocess
+
+        subprocess.Popen([str(exe)], cwd=work_dir, env=env)
+
+
 def reveal_in_explorer(path_str: str, *, select_file: bool = False) -> None:
     """Open folder in the system file manager; optionally select a file (Windows/macOS)."""
     path = Path(path_str).resolve()
@@ -43,7 +73,8 @@ def reveal_in_explorer(path_str: str, *, select_file: bool = False) -> None:
         import subprocess
 
         if select_file and path.is_file():
-            subprocess.Popen(["explorer", "/select,", str(path)])
+            # /select, 与路径必须在同一参数内，否则含空格或 [] 的路径会解析失败
+            subprocess.Popen(["explorer", "/select," + os.path.normpath(str(path))])
         else:
             folder = path if path.is_dir() else path.parent
             os.startfile(str(folder))
@@ -92,10 +123,6 @@ class GameDetailDialog(QDialog):
         self.resize(920, 680)
         self.setStyleSheet("""
             QGroupBox { font-weight: 600; margin-top: 8px; }
-            QLabel { color: #93A1B6; }
-            .meta-label { color: #7FA7D9; font-size: 12px; }
-            .meta-value { color: #F3F6FB; font-size: 12px; }
-            .missing { color: #6B7280; font-style: italic; }
         """)
 
         root = QVBoxLayout(self)
@@ -108,10 +135,8 @@ class GameDetailDialog(QDialog):
             QPushButton { 
                 border: none; 
                 padding: 4px 8px; 
-                color: #93A1B6; 
                 font-size: 16px;
             }
-            QPushButton:hover { color: #F3F6FB; }
         """)
         self._close_btn.clicked.connect(self.reject)
         top_bar.addWidget(self._close_btn)
@@ -121,7 +146,7 @@ class GameDetailDialog(QDialog):
         self._cover = QLabel()
         self._cover.setFixedSize(200, 300)
         self._cover.setAlignment(Qt.AlignCenter)
-        self._cover.setStyleSheet("background:#252C36;border-radius:8px;")
+        self._cover.setStyleSheet("border-radius:8px;")
         self._cover.setAcceptDrops(True)
         self._cover.dragEnterEvent = self._on_cover_drag_enter
         self._cover.dropEvent = self._on_cover_drop
@@ -131,7 +156,7 @@ class GameDetailDialog(QDialog):
         meta_col = QVBoxLayout()
         self._title = QLabel()
         self._title.setWordWrap(True)
-        self._title.setStyleSheet("font-size:16px;font-weight:600;color:#F3F6FB;")
+        self._title.setStyleSheet("font-size:16px;font-weight:600;")
         meta_col.addWidget(self._title)
 
         meta_grid = QWidget()
@@ -140,41 +165,50 @@ class GameDetailDialog(QDialog):
         self._meta_items = []
         
         self._title_original = QLabel()
-        self._title_original.setStyleSheet(".meta-label { color: #7FA7D9; } .meta-value { color: #F3F6FB; }")
         self._meta_items.append(self._title_original)
         meta_grid_layout.addWidget(self._title_original)
         
         self._title_localized = QLabel()
-        self._title_localized.setStyleSheet(".meta-label { color: #7FA7D9; } .meta-value { color: #F3F6FB; }")
         self._meta_items.append(self._title_localized)
         meta_grid_layout.addWidget(self._title_localized)
         
         self._rating_line = QLabel()
-        self._rating_line.setStyleSheet(".meta-label { color: #7FA7D9; } .meta-value { color: #F3F6FB; }")
         self._meta_items.append(self._rating_line)
         meta_grid_layout.addWidget(self._rating_line)
         
         self._platforms_line = QLabel()
-        self._platforms_line.setStyleSheet(".meta-label { color: #7FA7D9; } .meta-value { color: #F3F6FB; }")
         self._meta_items.append(self._platforms_line)
         meta_grid_layout.addWidget(self._platforms_line)
         
         self._languages_line = QLabel()
-        self._languages_line.setStyleSheet(".meta-label { color: #7FA7D9; } .meta-value { color: #F3F6FB; }")
         self._meta_items.append(self._languages_line)
         meta_grid_layout.addWidget(self._languages_line)
+
+        # LE profile selector
+        le_profile_row = QHBoxLayout()
+        le_profile_label = QLabel("LE 转区配置:")
+        le_profile_row.addWidget(le_profile_label)
+        self._le_profile_combo = QComboBox()
+        self._le_profile_combo.addItem("不使用", "")
+        self._le_profile_combo.addItem("ja-JP (日语)", "ja-JP")
+        self._le_profile_combo.addItem("zh-CN (简体中文)", "zh-CN")
+        self._le_profile_combo.addItem("zh-TW (繁体中文)", "zh-TW")
+        self._le_profile_combo.addItem("ko-KR (韩语)", "ko-KR")
+        self._le_profile_combo.currentIndexChanged.connect(self._on_le_profile_changed)
+        le_profile_row.addWidget(self._le_profile_combo)
+        le_profile_row.addStretch(1)
+        meta_grid_layout.addLayout(le_profile_row)
 
         meta_grid_layout.addStretch(1)
         meta_col.addWidget(meta_grid)
 
         self._meta_source = QLabel()
-        self._meta_source.setStyleSheet("color:#7FA7D9;font-size:11px;")
+        self._meta_source.setObjectName("gameMetaSource")
         self._meta_source.setToolTip("数据来源说明")
         meta_col.addWidget(self._meta_source)
 
         self._play_summary = QLabel()
         self._play_summary.setWordWrap(True)
-        self._play_summary.setStyleSheet("color:#93A1B6;font-size:12px;")
         meta_col.addWidget(self._play_summary)
 
         meta_col.addStretch(1)
@@ -191,7 +225,6 @@ class GameDetailDialog(QDialog):
         
         self._refresh_meta_hint = QLabel()
         self._refresh_meta_hint.setAlignment(Qt.AlignCenter)
-        self._refresh_meta_hint.setStyleSheet("color:#7FA7D9;font-size:12px;")
         desc_layout.addWidget(self._refresh_meta_hint)
         root.addWidget(desc_box, 1)
 
@@ -221,6 +254,11 @@ class GameDetailDialog(QDialog):
         )
         self._btn_run_le.clicked.connect(self._on_run_game_le)
         btn_group1.addWidget(self._btn_run_le)
+
+        self._btn_debug = QPushButton("🔧 调试启动")
+        self._btn_debug.setToolTip("测试游戏能否启动，显示详细诊断信息（退出码、运行时长、建议等）")
+        self._btn_debug.clicked.connect(self._on_debug_launch)
+        btn_group1.addWidget(self._btn_debug)
         
         btn_group1.addStretch(1)
         root.addLayout(btn_group1)
@@ -308,12 +346,13 @@ class GameDetailDialog(QDialog):
         root.addWidget(self._debug_box)
 
         self._status_label = QLabel()
-        self._status_label.setStyleSheet("color:#7FA7D9;font-size:11px;padding:4px;")
+        self._status_label.setObjectName("statusBar")
         self._status_label.setAlignment(Qt.AlignCenter)
         root.addWidget(self._status_label)
 
         self._game: GameRecord | None = None
         self._is_loading = False
+        self._le_profile_loading = False
         self.reload_from_db()
 
     def _db(self) -> Database:
@@ -338,6 +377,21 @@ class GameDetailDialog(QDialog):
         self._game = game
         self._apply_game(game)
         self._btn_run_le.setEnabled(self._main.is_locale_emulator_usable())
+
+        # Set LE profile combo box
+        self._le_profile_loading = True
+        if hasattr(self._db(), 'get_game_le_profile'):
+            current_profile = self._db().get_game_le_profile(self._game_id)
+        else:
+            current_profile = ""
+        # Find matching index
+        idx = self._le_profile_combo.findData(current_profile)
+        if idx >= 0:
+            self._le_profile_combo.setCurrentIndex(idx)
+        else:
+            self._le_profile_combo.setCurrentIndex(0)
+        self._le_profile_loading = False
+
         raw = self._db().get_game_storage_debug(self._game_id)
         lines = []
         if raw:
@@ -446,6 +500,27 @@ class GameDetailDialog(QDialog):
         QApplication.clipboard().setText(self._debug.toPlainText())
         self._main.status.setText("已复制调试信息到剪贴板")
 
+    def _on_le_profile_changed(self, index: int) -> None:
+        """Save LE profile selection to database and generate/remove .le.config."""
+        if self._le_profile_loading:
+            return
+        if not self._game:
+            return
+        profile = self._le_profile_combo.itemData(index) or ""
+        if hasattr(self._db(), 'set_game_le_profile'):
+            self._db().set_game_le_profile(self._game_id, profile)
+        # Generate or remove .le.config accordingly
+        try:
+            from app.services.le_config_service import ensure_le_config, remove_le_config
+            if profile:
+                leproc_path = self._db().get_locale_emulator_leproc_path().strip() if hasattr(self._db(), 'get_locale_emulator_leproc_path') else ""
+                ensure_le_config(self._game.launch_exe, profile, leproc_path=leproc_path)
+            else:
+                remove_le_config(self._game.launch_exe)
+        except Exception:
+            pass
+        self._set_status(f"LE 转区配置已更新: {self._le_profile_combo.currentText()}")
+
     def _on_delete_from_library(self) -> None:
         if not self._game:
             return
@@ -469,6 +544,9 @@ class GameDetailDialog(QDialog):
             self._game_id, locale_emulator=True, message_parent=self
         )
         self.reload_from_db()
+
+    def _on_debug_launch(self) -> None:
+        self._main.debug_launch_game(self._game_id, parent=self)
 
     def _on_open_launch_dir(self) -> None:
         if not self._game:

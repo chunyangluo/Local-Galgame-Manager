@@ -188,12 +188,12 @@ def build_migration_plan(db: Database) -> MigrationPlan:
 
 
 def _merge_metadata(conn, keeper_id: int, duplicate_id: int) -> list[str]:
-    keeper = dict(
-        conn.execute("SELECT * FROM games WHERE id = ?", (keeper_id,)).fetchone()
-    )
-    dup = dict(
-        conn.execute("SELECT * FROM games WHERE id = ?", (duplicate_id,)).fetchone()
-    )
+    keeper_row = conn.execute("SELECT * FROM games WHERE id = ?", (keeper_id,)).fetchone()
+    dup_row = conn.execute("SELECT * FROM games WHERE id = ?", (duplicate_id,)).fetchone()
+    if keeper_row is None or dup_row is None:
+        return []
+    keeper = dict(keeper_row)
+    dup = dict(dup_row)
     updates: dict[str, Any] = {}
     for col in _MERGE_TEXT_COLUMNS:
         if _row_text(keeper, col):
@@ -229,6 +229,19 @@ def _repoint_game_children(conn, keeper_id: int, duplicate_id: int) -> None:
     )
     conn.execute(
         "UPDATE favorites SET game_id = ? WHERE game_id = ?",
+        (keeper_id, duplicate_id),
+    )
+    conn.execute(
+        """
+        DELETE FROM hidden_games
+        WHERE game_id = ? AND user_id IN (
+            SELECT user_id FROM hidden_games WHERE game_id = ?
+        )
+        """,
+        (duplicate_id, keeper_id),
+    )
+    conn.execute(
+        "UPDATE hidden_games SET game_id = ? WHERE game_id = ?",
         (keeper_id, duplicate_id),
     )
     conn.execute(

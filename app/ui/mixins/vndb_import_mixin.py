@@ -110,6 +110,25 @@ class VndbImportMixin:
             self.db.upsert_game(name, root_dir, launch_exe, cover)
         if rows:
             self.db.upsert_games_batch(rows)
+
+        # Auto-detect LE profile for newly imported games
+        try:
+            from app.services.le_config_service import detect_recommended_le_profile
+            for name, root_dir, launch_exe in targets:
+                if not root_dir or not launch_exe:
+                    continue
+                game = self.db.find_game_by_root(root_dir)
+                if game is None:
+                    continue
+                existing_profile = self.db.get_game_le_profile(game.id) if hasattr(self.db, 'get_game_le_profile') else ""
+                if existing_profile:
+                    continue  # Don't overwrite user-set profile
+                recommended = detect_recommended_le_profile(root_dir, launch_exe)
+                if recommended and hasattr(self.db, 'set_game_le_profile'):
+                    self.db.set_game_le_profile(game.id, recommended)
+        except Exception:
+            pass  # Auto-detect is best-effort, don't block import
+
         self.refresh_games()
         success = len(rows)
         self.status.setText(f"VNDB 导入完成：成功 {success} / {total}")

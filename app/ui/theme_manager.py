@@ -730,6 +730,86 @@ QDialogButtonBox QPushButton {{
     color: {btn_text};
     font-weight: 600;
 }}
+QScrollBar:horizontal {{
+    height: 6px;
+    background: transparent;
+    border-radius: 3px;
+}}
+QScrollBar::handle:horizontal {{
+    background: rgba(90, 100, 120, 0.6);
+    border-radius: 3px;
+    min-width: 20px;
+}}
+QScrollBar::handle:horizontal:hover {{
+    background: rgba(110, 125, 155, 0.8);
+}}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+    width: 0;
+}}
+QToolTip {{
+    color: {c.text_primary};
+    background: {c.secondary_bg};
+    border: 1px solid {c.border_color};
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: {c.font_size_small}px;
+}}
+QSlider::groove:horizontal {{
+    height: 4px;
+    background: {c.tertiary_bg};
+    border-radius: 2px;
+}}
+QSlider::handle:horizontal {{
+    background: {c.accent_color};
+    width: 14px;
+    height: 14px;
+    margin: -5px 0;
+    border-radius: 7px;
+}}
+QSlider::handle:horizontal:hover {{
+    background: {c.accent_light};
+}}
+QSlider::sub-page:horizontal {{
+    background: {c.accent_color};
+    border-radius: 2px;
+}}
+QSpinBox::up-button, QSpinBox::down-button {{
+    background: {c.tertiary_bg};
+    border: none;
+    width: 16px;
+}}
+QSpinBox::up-button:hover, QSpinBox::down-button:hover {{
+    background: {c.button_hover};
+}}
+QSpinBox::up-arrow {{
+    width: 8px;
+    height: 8px;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-bottom: 5px solid {c.text_tertiary};
+}}
+QSpinBox::down-arrow {{
+    width: 8px;
+    height: 8px;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid {c.text_tertiary};
+}}
+QCheckBox::indicator:hover {{
+    border-color: {c.accent_color};
+}}
+QDateEdit {{
+    color: {c.text_primary};
+    background: {c.tertiary_bg};
+    border: 1px solid {c.border_color};
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: {c.font_size_small}px;
+    min-height: 28px;
+}}
+QDateEdit:focus {{
+    border-color: {c.accent_color};
+}}
 """
     
     def add_listener(self, callback):

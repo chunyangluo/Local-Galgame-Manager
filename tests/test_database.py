@@ -258,6 +258,18 @@ class TestFavorites:
         assert db.get_game_by_id(uid, gid).favorite is False
 
 
+class TestHiddenGames:
+    def test_set_and_unset_hidden(self, db_with_user: tuple[Database, int]) -> None:
+        db, uid = db_with_user
+        db.upsert_game("Game", "/g", "/g/g.exe")
+        games = db.list_games(uid)
+        gid = games[0].id
+        db.set_hidden(uid, gid, True)
+        assert db.get_game_by_id(uid, gid).hidden is True
+        db.set_hidden(uid, gid, False)
+        assert db.get_game_by_id(uid, gid).hidden is False
+
+
 class TestPlayRecords:
     def test_record_and_list(self, db_with_user: tuple[Database, int]) -> None:
         db, uid = db_with_user

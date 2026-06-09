@@ -1,6 +1,6 @@
 # Local Galgame Manager
 
-**版本**: v2.0.12 | [下载最新版](https://github.com/chunyangluo/Local-Galgame-Manager/releases/latest)
+**版本**: v2.2.0 | [下载最新版](https://github.com/chunyangluo/Local-Galgame-Manager/releases/latest)
 
 <p align="center">
   <img src="docs/assets/main-window.png" alt="Local Galgame Manager 主界面" width="820" />
@@ -10,10 +10,10 @@
 
 ## 核心亮点
 
-1. **Windows 10/11** 本地 Galgame 库：多根目录扫描、识别启动 `exe`、大库网格分页 + 列表分批渲染。  
-2. 元数据 **VNDB 为主、Bangumi 为辅**；封面在线缓存、重试与本地回退（仅本地 / 本地优先 / 网图优先）。  
-3. **手动修改的名称、启动路径、封面、存档路径不会被扫描或 VNDB 覆盖**；存档 ZIP 备份/还原、游玩记录、多用户与 CLI。  
-4. **扩展工具**：插件钩子、HBE 解密、**自动化解压**（含 ISO+MDS 光盘包与安装引导）、**FDM 下载**、隐藏游戏等，均在「更多」菜单进入。
+1. **Windows 10/11** 本地 Galgame 库：多根目录扫描、识别启动 `exe`、大库网格分页 + 列表分批渲染。
+2. 元数据 **VNDB 为主、Bangumi 为辅**；封面在线缓存、重试与本地回退（仅本地 / 本地优先 / 网图优先）。
+3. **手动修改的名称、启动路径、封面、存档路径不会被扫描或 VNDB 覆盖**；存档 ZIP 备份/还原、游玩记录、多用户与 CLI。
+4. **扩展工具**：插件钩子、HBE 解密、**自动化解压**（含 ISO+MDS 光盘包与安装引导、RAR 多卷分包、验收报告）、**FDM 下载**、**一键工作流**（解压→扫描→导入）、**调试启动**、**数据管理**（文件管理+一键清空）等，均在「更多」菜单进入。
 
 操作细节见 **`docs/USER_GUIDE.md`**；插件见 **`docs/PLUGIN_GUIDE.md`**；发布步骤见 **`docs/RELEASE_CHECKLIST.md`**。
 
@@ -35,8 +35,10 @@
 ### 扫描与库
 
 - 多扫描根、全量/增量扫描、扫描后 **VNDB 批量导入**（多线程，可取消）
+- **增量扫描并增量 VNDB 导入** — 仅处理新游戏，最快方式
+- **🚀 一键工作流** — 自动解压 → 增量扫描 → 增量 VNDB 导入，全流程一键完成
 - **路径迁移**（一次性）：`python scripts/migrate_game_paths.py`（预览）→ `--apply --backup`
-- **数据管理**：「更多」→「数据管理…」— 列表删库、可选删安装目录；右键/详情「从库中删除」
+- **数据管理**：「更多」→「数据管理…」— 数据库管理（批量删除）+ 文件管理（目录概览、文件浏览、一键清空归档/失败目录）
 
 ### 主界面（v2.0.11）
 
@@ -162,13 +164,13 @@ Compress-Archive -Path "dist\builds\$buildId\LocalGalgameManager" -DestinationPa
 # 5. 提交并推送
 git add -A
 git status
-git commit -m "v2.0.12: 自动解压类型分类处理与善后优化"
+git commit -m "v2.2.0: 综合设置对话框、密码本管理、菜单优化"
 git push origin main
 
 # 6. 标签与 GitHub Release（需 gh CLI 已登录）
-git tag v2.0.12
-git push origin v2.0.12
-gh release create v2.0.12 --title "Local Galgame Manager v2.0.12" --notes-file CHANGELOG.md $zip
+git tag v2.2.0
+git push origin v2.2.0
+gh release create v2.2.0 --title "Local Galgame Manager v2.2.0" --notes-file CHANGELOG.md $zip
 ```
 
 | 步骤 | 说明 |
@@ -215,8 +217,17 @@ A：`%LOCALAPPDATA%\LocalGalgameManager\data\`；可用 **更多 → 导出备�
 **Q：VNDB 封面一直失败？**  
 A：后台下载到 `covers/`；右键 **重新获取封面**；检查网络与封面策略（USER_GUIDE）。
 
-**Q：自动化解压卡住？**  
+**Q：游戏启动闪退？**
+A：使用右键「调试启动」查看退出码和诊断建议；或在游戏详情中设置 LE 转区配置（per-game）。
+
+**Q：自动化解压卡住？**
 A：扫描页有进度条与「停止」；大文件/RAR5/ISO 耗时较长属正常，可看底部彩色日志。**仅光盘镜像（ISO+MDS）** 展开后会提示安装 setup.exe，普通压缩包不会弹出安装提示。安装时建议装到 **子文件夹**（勿装到游戏库根目录）。
+
+**Q：归档目录占空间？**
+A：「更多」→「数据管理」→「文件管理」→ 一键清空归档目录。
+
+**Q：想一键完成下载→解压→导入？**
+A：点击工具栏「🚀 一键工作流」，自动执行：解压监控目录 → 增量扫描 → 增量 VNDB 导入。
 
 **Q：托盘点了退出还在？**  
 A：请用托盘 **「退出程序」**；仅关主窗口 **×** 会最小化到托盘。

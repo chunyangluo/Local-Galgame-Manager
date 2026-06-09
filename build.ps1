@@ -1,4 +1,5 @@
-# Switch to the script's directory
+# 脚本自动管理员提权
+#Requires -RunAsAdministrator
 $scriptPath = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $scriptPath
 
@@ -71,7 +72,6 @@ if (-not (Test-Path $iconPath)) {
     exit 1
 }
 
-$integrationsPath = Join-Path $PSScriptRoot "integrations"
 python -m PyInstaller --noconfirm --windowed --name LocalGalgameManager `
     --icon "$iconPath" `
     --add-data "${iconPath};app/assets" `
@@ -95,6 +95,7 @@ python -m PyInstaller --noconfirm --windowed --name LocalGalgameManager `
     --collect-all websockets `
     --collect-all click `
     app/main.py --distpath "$distPath" --workpath "$workPath"
+
 if ($LASTEXITCODE -ne 0) {
     Write-Error "PyInstaller build failed."
     exit $LASTEXITCODE
@@ -107,7 +108,6 @@ if (-not (Test-Path $exePath)) {
     exit 1
 }
 
-# Stable output for shortcuts / manual launches (always points to the latest successful build).
 $latestDir = Join-Path $distRoot "latest\LocalGalgameManager"
 if (Test-Path (Split-Path $latestDir -Parent)) {
     Remove-Item (Split-Path $latestDir -Parent) -Recurse -Force
@@ -118,40 +118,45 @@ $stableExePath = Join-Path $latestDir "LocalGalgameManager.exe"
 $workingDirectory = $latestDir
 Write-Host "Latest build copied to: $stableExePath"
 
-$shortcutNames = @(
-    "Local Galgame Manager.lnk",
-    "本地 Galgame 管理器.lnk"
-)
+# ======================
+# 快捷方式创建（已修复）
+# ======================
 try {
     $shell = New-Object -ComObject WScript.Shell
-    foreach ($name in $shortcutNames) {
-        $shortcutPath = Join-Path $desktopPath $name
-        $shortcut = $shell.CreateShortcut($shortcutPath)
-        $shortcut.TargetPath = $stableExePath
-        $shortcut.WorkingDirectory = $workingDirectory
-        $shortcut.IconLocation = "$stableExePath,0"
-        $shortcut.Save()
-        Write-Host "Desktop shortcut updated: $shortcutPath"
+    $shortcutPath = Join-Path $desktopPath "Local Galgame Manager.lnk"
+    
+    if (Test-Path $shortcutPath) {
+        Remove-Item $shortcutPath -Force -ErrorAction Stop
     }
+
+    $shortcut = $shell.CreateShortcut($shortcutPath)
+    $shortcut.TargetPath = $stableExePath
+    $shortcut.WorkingDirectory = $workingDirectory
+    $shortcut.IconLocation = $stableExePath
+    $shortcut.Save()
+
+    Write-Host "✅ Desktop shortcut created successfully: $shortcutPath" -ForegroundColor Green
 }
 catch {
-    Write-Host "Note: Build succeeded but failed to create desktop shortcut (may be permission issue)."
+    Write-Host "⚠️ Could not create desktop shortcut: $_" -ForegroundColor Yellow
     Write-Host "You can manually create a shortcut to: $stableExePath"
 }
 
+# ======================
+# 开机自启（已修复）
+# ======================
 try {
     $regPath = "HKCU:\$RUN_KEY_PATH"
-    if (Test-Path $regPath) {
-        $existingValue = Get-ItemProperty -Path $regPath -Name $RUN_VALUE_NAME -ErrorAction SilentlyContinue
-        if ($null -ne $existingValue) {
-            Set-ItemProperty -Path $regPath -Name $RUN_VALUE_NAME -Value "`"$stableExePath`""
-            Write-Host "Startup registry updated: $stableExePath"
-        }
+    if (!(Test-Path $regPath)) {
+        New-Item -Path $regPath -Force | Out-Null
     }
+    Set-ItemProperty -Path $regPath -Name $RUN_VALUE_NAME -Value "`"$stableExePath`""
+    Write-Host "✅ Startup registry updated: $stableExePath" -ForegroundColor Green
 }
 catch {
-    Write-Host "Note: Could not update startup registry (may not be enabled)"
+    Write-Host "⚠️ Could not update startup registry: $_" -ForegroundColor Yellow
 }
 
-Write-Host "Build output (timestamped): $exePath"
-Write-Host "Build output (latest):       $stableExePath"
+Write-Host "`n🎉 BUILD FULLY SUCCESSFUL!" -ForegroundColor Cyan
+Write-Host "Timestamped build: $exePath"
+Write-Host "Latest stable:    $stableExePath"

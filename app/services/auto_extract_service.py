@@ -221,12 +221,48 @@ async def _extract_async(
     file_manager = globals()["_file_manager"]
     custom_password = password if password else None
     output_dir = target_dir if target_dir else None
+
+    # Generate extraction report
+    report_gen = None
+    try:
+        from core.report_generator import ExtractReportGenerator  # type: ignore[import-not-found]
+        from core.config import get_settings  # type: ignore[import-not-found]
+        settings = get_settings()
+        report_gen = ExtractReportGenerator(settings)
+        cfg = read_directory_config()
+        report_gen.start(
+            monitor_dir=str(Path(file_path).parent),
+            game_save_dir=cfg.get("game_save", ""),
+        )
+    except Exception:
+        pass
+
+    import time
+    start_time = time.monotonic()
     result = await extractor.extract(
         file_path=file_path,
         custom_password=custom_password,
         output_dir=output_dir,
     )
+    elapsed = time.monotonic() - start_time
     post_result, _ = file_manager.handle_extract_result(result)
+
+    # Record result in report
+    if report_gen is not None:
+        try:
+            final_path = ""
+            is_cover = False
+            if post_result:
+                final_path = post_result.get("final_path", "")
+                is_cover = bool(post_result.get("cover_moved", False))
+            report_gen.add_result(result, final_path=final_path, is_cover=is_cover, elapsed=elapsed)
+            report_gen.end()
+            report_path = report_gen.generate_report()
+            if report_path:
+                logging.getLogger(__name__).info("Extraction report generated: %s", report_path)
+        except Exception:
+            pass
+
     return _result_from_tool(result, post_result)
 
 
@@ -239,9 +275,11 @@ def _collect_archive_entries(watch_dir: Path) -> tuple[list[tuple[Path, str]], i
     from core.archive_detector import (  # type: ignore[import-not-found]
         detect_7z_split_volume_set,
         detect_archive_type,
+        detect_rar_multipart_volume_set,
         detect_split_volume_set,
         is_7z_split_part,
         is_download_temp_file,
+        is_rar_multipart_part,
     )
     from core.config import get_settings  # type: ignore[import-not-found]
 
@@ -300,6 +338,33 @@ def _collect_archive_entries(watch_dir: Path) -> tuple[list[tuple[Path, str]], i
                 for f in split_7z["all_files"]:
                     processed_files.add(str(f))
                 entries.append((Path(split_7z["extract_entry"]), atype))
+            continue
+
+        # ---- RAR multi-part (part1.rar / part2.rar / …) ----
+        rar_multipart = detect_rar_multipart_volume_set(item)
+        if not rar_multipart:
+            rar_part = is_rar_multipart_part(item)
+            if rar_part:
+                rar_multipart = detect_rar_multipart_volume_set(rar_part["first_part"])
+        if rar_multipart:
+            base = rar_multipart["base_name"]
+            if base in processed_bases:
+                continue
+            try:
+                total_size = sum(
+                    Path(f).stat().st_size
+                    for f in rar_multipart["all_files"]
+                    if Path(f).exists()
+                )
+            except OSError:
+                continue
+            if total_size < MIN_ARCHIVE_SIZE_BYTES:
+                skipped += 1
+            else:
+                processed_bases.add(base)
+                for f in rar_multipart["all_files"]:
+                    processed_files.add(str(f))
+                entries.append((Path(rar_multipart["extract_entry"]), "rar"))
             continue
 
         split_info = detect_split_volume_set(item)
@@ -366,11 +431,29 @@ async def _scan_async(
         emit({"phase": "empty", "message": "未发现满足条件的压缩包（≥200MB）"})
         return result
 
+    # Initialize report generator for batch scan
+    report_gen = None
+    try:
+        from core.report_generator import ExtractReportGenerator  # type: ignore[import-not-found]
+        from core.config import get_settings  # type: ignore[import-not-found]
+        settings = get_settings()
+        report_gen = ExtractReportGenerator(settings)
+        report_gen.start(
+            monitor_dir=str(watch_dir),
+            game_save_dir=cfg.get("game_save", ""),
+        )
+        if skipped > 0:
+            report_gen.record_skipped(skipped)
+    except Exception:
+        pass
+
+    import time
+
     for index, (item, _atype) in enumerate(entries, start=1):
         if cancelled():
             result.cancelled = True
             emit({"phase": "cancelled", "index": index - 1, "total": total})
-            return result
+            break
         emit({
             "phase": "extracting",
             "index": index,
@@ -378,9 +461,29 @@ async def _scan_async(
             "name": item.name,
         })
         result.total += 1
+        start_time = time.monotonic()
         try:
             extract_result = await extractor.extract(str(item))
+            elapsed = time.monotonic() - start_time
             post_result, _moved = file_manager.handle_extract_result(extract_result)
+
+            # Record in report
+            if report_gen is not None:
+                try:
+                    final_path = ""
+                    is_cover = False
+                    if post_result:
+                        final_path = post_result.get("final_path", "")
+                        is_cover = bool(post_result.get("cover_moved", False))
+                    report_gen.add_result(
+                        extract_result,
+                        final_path=final_path,
+                        is_cover=is_cover,
+                        elapsed=elapsed,
+                    )
+                except Exception:
+                    pass
+
             if extract_result.success:
                 result.success += 1
                 msg_parts = [str(extract_result.extract_dir or "")]
@@ -433,6 +536,16 @@ async def _scan_async(
                 "message": str(exc),
             })
 
+    # Generate report
+    if report_gen is not None:
+        try:
+            report_gen.end()
+            report_path = report_gen.generate_report()
+            if report_path:
+                logging.getLogger(__name__).info("Scan extraction report generated: %s", report_path)
+        except Exception:
+            pass
+
     emit({"phase": "finished", "total": total})
     return result
 
@@ -469,3 +582,49 @@ def report_output_dir() -> Path | None:
         return None
     d = root / "extract_report"
     return d if d.is_dir() else d
+
+
+# ---------------------------------------------------------------------------
+# 密码管理桥接
+# ---------------------------------------------------------------------------
+
+def get_password_manager():
+    """返回 PasswordManager 单例，供 UI 调用。"""
+    _ensure_runtime()
+    return _extractor.password_manager  # type: ignore[attr-defined]
+
+
+def get_passwords_with_stats() -> list[dict]:
+    """获取所有密码及其统计信息。"""
+    pm = get_password_manager()
+    return pm.get_all_with_stats()
+
+
+def add_password(password: str) -> tuple[bool, str]:
+    """添加密码。"""
+    pm = get_password_manager()
+    return pm.add_password(password)
+
+
+def remove_password(password: str) -> tuple[bool, str]:
+    """删除密码。"""
+    pm = get_password_manager()
+    return pm.remove_password(password)
+
+
+def set_password_pinned(password: str, pinned: bool) -> tuple[bool, str]:
+    """置顶/取消置顶密码。"""
+    pm = get_password_manager()
+    return pm.set_pinned(password, pinned)
+
+
+def move_password(password: str, direction: int) -> tuple[bool, str]:
+    """上移/下移密码。direction: -1=上移, +1=下移。"""
+    pm = get_password_manager()
+    return pm.move_password(password, direction)
+
+
+def clear_password_stats() -> tuple[bool, str]:
+    """清空密码使用统计。"""
+    pm = get_password_manager()
+    return pm.clear_stats()

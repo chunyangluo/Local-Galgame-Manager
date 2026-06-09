@@ -36,43 +36,47 @@ class VndbTask(QRunnable):
         self._window_title = window_title
 
     def run(self) -> None:  # type: ignore[override]
-        if self._cancel_check():
-            self.signals.finished.emit(self.index, None, None)
-            return
-        # 多关键词检索：目录名 + 窗口标题
-        extra_queries: list[str] | None = None
-        if self._window_title:
-            extra_queries = [self._window_title]
-        outcome = self._vndb_service.search_title(self.name, limit=1, extra_queries=extra_queries)
-        cached_cover: str | None = None
-        if outcome.success and outcome.record:
-            try:
-                cached_cover = self._cover_manager.cache_cover_with_fallback(
-                    image_url=outcome.record.image_url,
-                    cache_key=outcome.record.vndb_id,
-                    game_name=self.name,
+        try:
+            if self._cancel_check():
+                self.signals.finished.emit(self.index, None, None)
+                return
+            # 多关键词检索：目录名 + 窗口标题
+            extra_queries: list[str] | None = None
+            if self._window_title:
+                extra_queries = [self._window_title]
+            outcome = self._vndb_service.search_title(self.name, limit=1, extra_queries=extra_queries)
+            cached_cover: str | None = None
+            if outcome.success and outcome.record:
+                try:
+                    cached_cover = self._cover_manager.cache_cover_with_fallback(
+                        image_url=outcome.record.image_url,
+                        cache_key=outcome.record.vndb_id,
+                        game_name=self.name,
+                    )
+                except Exception:
+                    cached_cover = None
+            row: VndbImportRow | None = None
+            if outcome.success and outcome.record is not None:
+                rec = outcome.record
+                row = VndbImportRow(
+                    name=self.name,
+                    root_dir=self.root_dir,
+                    launch_exe=self.launch_exe,
+                    vndb_id=rec.vndb_id,
+                    title_original=rec.title_original,
+                    title_localized=rec.title_localized,
+                    description=rec.description,
+                    rating=rec.rating,
+                    platforms=rec.platforms_to_str(),
+                    languages=rec.languages_to_str(),
+                    image_url=rec.image_url,
+                    screenshots_json=rec.screenshots_to_json(),
+                    cover_path=cached_cover,
                 )
-            except Exception:
-                cached_cover = None
-        row: VndbImportRow | None = None
-        if outcome.success and outcome.record is not None:
-            rec = outcome.record
-            row = VndbImportRow(
-                name=self.name,
-                root_dir=self.root_dir,
-                launch_exe=self.launch_exe,
-                vndb_id=rec.vndb_id,
-                title_original=rec.title_original,
-                title_localized=rec.title_localized,
-                description=rec.description,
-                rating=rec.rating,
-                platforms=rec.platforms_to_str(),
-                languages=rec.languages_to_str(),
-                image_url=rec.image_url,
-                screenshots_json=rec.screenshots_to_json(),
-                cover_path=cached_cover,
-            )
-        self.signals.finished.emit(self.index, row, outcome)
+            self.signals.finished.emit(self.index, row, outcome)
+        except Exception:
+            # Ensure finished is always emitted so the counter reaches total
+            self.signals.finished.emit(self.index, None, None)
 
 
 class VndbImportWorker(QObject):

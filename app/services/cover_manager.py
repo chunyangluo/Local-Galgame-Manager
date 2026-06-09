@@ -162,11 +162,18 @@ def _read_webp_size(data: bytes) -> tuple[int, int] | None:
 
 
 def read_image_size_fast(path: Path) -> tuple[int, int] | None:
-    with open(path, "rb") as f:
-        header = f.read(64)
-    if header[:2] == b"\xff\xd8":
+    try:
         with open(path, "rb") as f:
-            data = f.read(min(path.stat().st_size, 65536))
+            header = f.read(64)
+    except OSError:
+        return None
+    if header[:2] == b"\xff\xd8":
+        try:
+            file_size = path.stat().st_size
+            with open(path, "rb") as f:
+                data = f.read(min(file_size, 65536))
+        except OSError:
+            return None
         return _read_jpeg_size(data)
     if header[:8] == b"\x89PNG\r\n\x1a\n":
         return _read_png_size(header)
@@ -254,7 +261,17 @@ class CoverManager:
     def _collect_image_candidates(self, root: Path, whitelist_only: bool, max_depth: int) -> list[Path]:
         files: list[Path] = []
         root_depth = len(root.parts)
-        for candidate in root.rglob("*"):
+        try:
+            iterator = root.rglob("*")
+        except OSError:
+            return files
+        while True:
+            try:
+                candidate = next(iterator)
+            except StopIteration:
+                break
+            except OSError:
+                continue
             if not candidate.is_file():
                 continue
             if candidate.suffix.lower() not in COVER_EXTENSIONS:

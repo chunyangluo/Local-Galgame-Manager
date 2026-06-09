@@ -167,13 +167,14 @@ class _RateLimiter:
         self._next_allowed = 0.0
 
     def acquire(self) -> None:
-        with self._lock:
-            now = time.monotonic()
-            wait = self._next_allowed - now
-            if wait > 0:
-                time.sleep(wait)
+        while True:
+            with self._lock:
                 now = time.monotonic()
-            self._next_allowed = now + self._interval
+                wait = self._next_allowed - now
+                if wait <= 0:
+                    self._next_allowed = now + self._interval
+                    return
+            time.sleep(wait)
 
 
 class VndbService:

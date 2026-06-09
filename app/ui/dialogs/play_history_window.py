@@ -61,9 +61,9 @@ def _thumb_pixmap(cover_path: str | None, image_url: str | None, target: QSize) 
             if not pm.isNull():
                 return pm.scaled(target, Qt.KeepAspectRatio, Qt.SmoothTransformation)
     pm = QPixmap(target)
-    pm.fill(QColor("#252C36"))
+    pm.fill(QColor("#2A3040"))
     painter = QPainter(pm)
-    painter.setPen(QPen(QColor("#465061"), 1))
+    painter.setPen(QPen(QColor("#4B5563"), 1))
     painter.drawRect(0, 0, target.width() - 1, target.height() - 1)
     painter.setPen(QPen(QColor("#90A0B8"), 1))
     hint = "等待缓存" if image_url and str(image_url).startswith(("http://", "https://")) else "无"

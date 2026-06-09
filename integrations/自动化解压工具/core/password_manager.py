@@ -100,3 +100,71 @@ class PasswordManager:
     def get_success_map(self) -> dict[str, str]:
         with self._lock:
             return dict(self._success_map)
+
+    def remove_password(self, password: str) -> tuple[bool, str]:
+        with self._lock:
+            if password not in self._passwords:
+                return False, "密码不存在"
+            self._passwords.remove(password)
+            self._success_counts.pop(password, None)
+            # 清理 success_map 中引用此密码的条目
+            self._success_map = {
+                k: v for k, v in self._success_map.items() if v != password
+            }
+            self._save()
+            logger.info(f"删除密码: {password[0]}***{password[-1] if len(password) > 1 else ''}")
+            return True, "删除成功"
+
+    def set_pinned(self, password: str, pinned: bool) -> tuple[bool, str]:
+        """置顶或取消置顶密码。置顶的密码优先尝试。"""
+        with self._lock:
+            if password not in self._passwords:
+                return False, "密码不存在"
+            if pinned:
+                if password not in PINNED_PASSWORDS:
+                    PINNED_PASSWORDS.append(password)
+            else:
+                if password in PINNED_PASSWORDS:
+                    PINNED_PASSWORDS.remove(password)
+            self._save()
+            action = "置顶" if pinned else "取消置顶"
+            logger.info(f"{action}密码: {password[0]}***{password[-1] if len(password) > 1 else ''}")
+            return True, f"{action}成功"
+
+    def move_password(self, password: str, direction: int) -> tuple[bool, str]:
+        """在密码本中上移/下移密码。direction: -1=上移, +1=下移。"""
+        with self._lock:
+            if password not in self._passwords:
+                return False, "密码不存在"
+            idx = self._passwords.index(password)
+            new_idx = idx + direction
+            if new_idx < 0 or new_idx >= len(self._passwords):
+                return False, "已在边界"
+            self._passwords[idx], self._passwords[new_idx] = (
+                self._passwords[new_idx],
+                self._passwords[idx],
+            )
+            self._save()
+            return True, "移动成功"
+
+    def clear_stats(self) -> tuple[bool, str]:
+        """清空所有密码的使用统计。"""
+        with self._lock:
+            self._success_counts.clear()
+            self._success_map.clear()
+            self._save()
+            logger.info("已清空密码使用统计")
+            return True, "统计已清空"
+
+    def get_all_with_stats(self) -> list[dict]:
+        """返回所有密码及其统计信息，按当前优先级排序。"""
+        with self._lock:
+            ordered = self.get_passwords()
+            result = []
+            for p in ordered:
+                result.append({
+                    "password": p,
+                    "success_count": self._success_counts.get(p, 0),
+                    "is_pinned": p in PINNED_PASSWORDS,
+                })
+            return result

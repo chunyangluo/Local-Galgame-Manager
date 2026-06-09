@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 import subprocess
 import sys
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from PySide6.QtCore import Qt, QThreadPool
@@ -37,8 +38,20 @@ from app.services.auto_extract_service import (
     report_output_dir,
     write_directory_config,
 )
+from app.services.disc_install_guide import (
+    DiscInstallGuide,
+    enrich_guide_with_config,
+    guide_from_post_process,
+    guide_from_progress_payload,
+    resolve_installer_on_disk,
+)
+from app.services.loose_install_consolidator import (
+    consolidate_loose_install,
+    detect_loose_install_at_root,
+    suggested_install_directory,
+)
 from app.services.paths import auto_extract_readme, auto_extract_tool_dir
-from app.ui.dialogs.game_detail_dialog import reveal_in_explorer
+from app.ui.dialogs.game_detail_dialog import launch_executable, reveal_in_explorer
 from app.workers.auto_extract_worker import AutoExtractFileTask, AutoExtractScanTask
 
 if TYPE_CHECKING:
@@ -78,6 +91,10 @@ class AutoExtractDialog(QDialog):
         self._tabs.addTab(self._build_scan_tab(), "② 扫描与解压")
         self._tabs.addTab(self._build_single_tab(), "③ 单次解压")
         root.addWidget(self._tabs, 1)
+
+        self._install_guide_panel = self._build_install_guide_panel()
+        self._install_guide_panel.setVisible(False)
+        root.addWidget(self._install_guide_panel)
 
         root.addWidget(self._build_helper_bar())
 
@@ -122,7 +139,7 @@ class AutoExtractDialog(QDialog):
 
         chips = QHBoxLayout()
         chips.setSpacing(6)
-        for text in ("目录监控", "格式识别", "密码尝试", "嵌套解压", "整理入库"):
+        for text in ("目录监控", "格式识别", "密码尝试", "嵌套解压", "光盘镜像", "整理入库"):
             chip = QLabel(text)
             chip.setStyleSheet(
                 "background:rgba(127,167,217,0.18);color:#DCEBFF;"
@@ -202,6 +219,7 @@ class AutoExtractDialog(QDialog):
         desc = QLabel(
             "扫描「监控目录」下的压缩包（≥200MB），自动尝试密码、嵌套解压，"
             "识别游戏目录并移动到「游戏库目录」。"
+            "若包内为 ISO+MDS 光盘镜像，将自动展开并提示你运行 setup.exe 完成安装。"
         )
         desc.setWordWrap(True)
         layout.addWidget(desc)
@@ -260,6 +278,9 @@ class AutoExtractDialog(QDialog):
         self._single_password = QLineEdit()
         self._single_password.setPlaceholderText("留空则按密码本自动尝试")
         prow.addWidget(self._single_password, 1)
+        btn_pwd_mgr = QPushButton("管理密码本")
+        btn_pwd_mgr.clicked.connect(self._open_password_manager)
+        prow.addWidget(btn_pwd_mgr)
         layout.addLayout(prow)
 
         trow = QHBoxLayout()
@@ -279,12 +300,329 @@ class AutoExtractDialog(QDialog):
         self._single_progress.setVisible(False)
         layout.addWidget(self._single_progress)
 
-        hint = QLabel("解压后会执行嵌套解压、游戏目录识别，并按配置移动到游戏库。")
+        hint = QLabel(
+            "解压后会执行嵌套解压与游戏目录识别。"
+            "若为 (iso+mds) 类资源，将展开光盘并引导你手动运行安装程序。"
+        )
         hint.setWordWrap(True)
         hint.setStyleSheet("color:#586E75;font-size:11px;")
         layout.addWidget(hint)
         layout.addStretch(1)
         return w
+
+    # ---------- disc install guide ----------
+    def _build_install_guide_panel(self) -> QFrame:
+        frame = QFrame()
+        frame.setObjectName("discInstallGuide")
+        frame.setStyleSheet(
+            "#discInstallGuide{"
+            "background:rgba(230,184,92,0.12);"
+            "border:1px solid rgba(230,184,92,0.45);"
+            "border-radius:8px;}"
+            "#discInstallGuide QLabel{color:#E8DCC8;}"
+        )
+        layout = QVBoxLayout(frame)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(8)
+
+        title = QLabel("💿 光盘镜像资源 · 需手动安装")
+        title.setStyleSheet("font-weight:700;font-size:13px;color:#F5D78E;")
+        layout.addWidget(title)
+
+        self._install_guide_body = QLabel()
+        self._install_guide_body.setWordWrap(True)
+        self._install_guide_body.setTextFormat(Qt.TextFormat.RichText)
+        self._install_guide_body.setOpenExternalLinks(False)
+        layout.addWidget(self._install_guide_body)
+
+        self._install_guide_path = QLabel("")
+        self._install_guide_path.setWordWrap(True)
+        self._install_guide_path.setStyleSheet(
+            "font-family:Consolas,'Segoe UI',monospace;font-size:11px;color:#B8C8E0;"
+        )
+        layout.addWidget(self._install_guide_path)
+
+        self._install_suggested_path = QLabel("")
+        self._install_suggested_path.setWordWrap(True)
+        self._install_suggested_path.setStyleSheet(
+            "font-family:Consolas,'Segoe UI',monospace;font-size:12px;color:#F5D78E;"
+        )
+        layout.addWidget(self._install_suggested_path)
+
+        btn_row = QHBoxLayout()
+        self._btn_open_setup = QPushButton("打开 setup.exe")
+        self._btn_open_setup.setProperty("btnKind", "primary")
+        self._btn_open_setup.setToolTip("在资源管理器中打开安装程序所在文件夹并选中 setup.exe")
+        self._btn_open_setup.clicked.connect(self._open_installer_in_explorer)
+        btn_row.addWidget(self._btn_open_setup)
+
+        self._btn_run_setup = QPushButton("运行 setup.exe")
+        self._btn_run_setup.setToolTip(
+            "在安装程序所在目录下启动 setup.exe（与手动双击效果一致）"
+        )
+        self._btn_run_setup.clicked.connect(self._run_installer)
+        btn_row.addWidget(self._btn_run_setup)
+
+        self._btn_open_extract_dir = QPushButton("打开解压目录")
+        self._btn_open_extract_dir.clicked.connect(self._open_extract_dir_in_explorer)
+        btn_row.addWidget(self._btn_open_extract_dir)
+
+        self._btn_open_suggested_install = QPushButton("创建建议安装目录")
+        self._btn_open_suggested_install.setProperty("btnKind", "primary")
+        self._btn_open_suggested_install.setToolTip(
+            "在游戏库下创建独立子文件夹并打开，安装时请选此路径，勿选游戏库根目录"
+        )
+        self._btn_open_suggested_install.clicked.connect(self._open_suggested_install_dir)
+        btn_row.addWidget(self._btn_open_suggested_install)
+
+        self._btn_consolidate_loose = QPushButton("整理散落安装")
+        self._btn_consolidate_loose.setToolTip(
+            "若已误装到游戏库根目录，将散落的 exe/数据文件夹移入单独子目录"
+        )
+        self._btn_consolidate_loose.clicked.connect(self._consolidate_loose_install)
+        btn_row.addWidget(self._btn_consolidate_loose)
+
+        self._btn_goto_add_root = QPushButton("去主界面添加目录")
+        self._btn_goto_add_root.setToolTip("安装完成后，将安装目录加入库扫描路径")
+        self._btn_goto_add_root.clicked.connect(self._goto_main_add_scan_root)
+        btn_row.addWidget(self._btn_goto_add_root)
+
+        btn_row.addStretch(1)
+        btn_dismiss = QPushButton("知道了")
+        btn_dismiss.clicked.connect(lambda: self._install_guide_panel.setVisible(False))
+        btn_row.addWidget(btn_dismiss)
+        layout.addLayout(btn_row)
+
+        self._current_install_guide: DiscInstallGuide | None = None
+        return frame
+
+    def _format_install_guide_html(self, guide: DiscInstallGuide) -> str:
+        iso_note = ""
+        if guide.iso_names:
+            iso_note = (
+                f"<li>已自动展开光盘：<b>{html.escape(', '.join(guide.iso_names))}</b></li>"
+            )
+        setup_line = ""
+        if guide.installer_display():
+            setup_line = (
+                "<li>在资源管理器中运行安装程序（或点击下方按钮）：</li>"
+            )
+        suggested = html.escape(guide.suggested_install_path) if guide.suggested_install_path else ""
+        path_hint = ""
+        if suggested:
+            path_hint = (
+                "<li><b>安装路径必须选下方「建议子文件夹」</b>，"
+                f"不要选游戏库根目录：<br><code>{suggested}</code></li>"
+            )
+        else:
+            path_hint = (
+                "<li>安装路径请选游戏库下的<b>新建子文件夹</b>（纯英文），"
+                "切勿直接选游戏库根目录。</li>"
+            )
+        return (
+            "<ol style='margin:6px 0 6px 18px;padding:0;line-height:1.55;'>"
+            f"{iso_note}"
+            f"{setup_line}"
+            f"{path_hint}"
+            "<li>安装前可点「创建建议安装目录」；若已误装到根目录，点「整理散落安装」。</li>"
+            "<li>安装完成后在主界面点击<b>「添加目录」</b>，选择该<b>子文件夹</b>扫描入库。</li>"
+            "<li>老游戏若无法运行，可在游戏中使用 LE 转区启动。</li>"
+            "</ol>"
+        )
+
+    def _game_save_dir(self) -> str:
+        return read_directory_config().get("game_save", "").strip()
+
+    def _prepare_install_guide(self, guide: DiscInstallGuide) -> DiscInstallGuide:
+        guide = enrich_guide_with_config(guide, self._game_save_dir())
+        guide = resolve_installer_on_disk(guide)
+        return guide
+
+    def _show_install_guide(self, guide: DiscInstallGuide) -> None:
+        guide = self._prepare_install_guide(guide)
+        self._current_install_guide = guide
+        self._install_guide_body.setText(self._format_install_guide_html(guide))
+        path_text = guide.installer_display() or guide.extract_dir
+        if guide.installer_display() and guide.extract_dir:
+            path_text = f"{guide.installer_display()}\n（解压目录：{guide.extract_dir}）"
+        self._install_guide_path.setText(path_text)
+        if guide.suggested_install_path:
+            self._install_suggested_path.setText(
+                f"建议安装到（子文件夹）：\n{guide.suggested_install_path}"
+            )
+            self._install_suggested_path.show()
+        else:
+            self._install_suggested_path.hide()
+        has_installer = guide.installer_path is not None
+        self._btn_open_setup.setEnabled(has_installer or bool(guide.installer_exe))
+        self._btn_run_setup.setEnabled(has_installer)
+        self._btn_open_suggested_install.setEnabled(bool(guide.game_save_dir))
+        self._btn_consolidate_loose.setEnabled(bool(guide.game_save_dir))
+        self._install_guide_panel.setVisible(True)
+        self._log_line("检测到光盘镜像资源，请按上方黄色区域完成手动安装。", "warning")
+        self._check_loose_install_warning(guide.game_save_dir)
+
+    def _check_loose_install_warning(self, game_save: str) -> None:
+        if not game_save:
+            return
+        cluster = detect_loose_install_at_root(game_save)
+        if cluster is not None:
+            self._log_line(
+                f"检测到游戏库根目录有散落安装（{cluster.launcher_exe.name}），"
+                "可点击「整理散落安装」。",
+                "warning",
+            )
+
+    def _maybe_show_install_guide_from_result(self, result: AutoExtractResult) -> None:
+        pp = dict(result.post_process or {})
+        pp.setdefault("archive_file_name", result.file_name)
+        pp.setdefault("game_save_dir", self._game_save_dir())
+        guide = guide_from_post_process(pp, extract_dir=result.extract_dir)
+        if guide is not None:
+            guide = DiscInstallGuide(
+                extract_dir=guide.extract_dir,
+                installer_exe=guide.installer_exe,
+                iso_names=guide.iso_names,
+                archive_file_name=result.file_name,
+                game_save_dir=self._game_save_dir(),
+            )
+            self._show_install_guide(guide)
+
+    def _active_install_guide(self) -> DiscInstallGuide | None:
+        if self._current_install_guide is None:
+            return None
+        guide = self._prepare_install_guide(self._current_install_guide)
+        self._current_install_guide = guide
+        return guide
+
+    def _open_suggested_install_dir(self) -> None:
+        guide = self._active_install_guide()
+        game_save = guide.game_save_dir if guide else self._game_save_dir()
+        if not game_save:
+            QMessageBox.information(self, "提示", "请先在目录配置中设置「游戏库目录」。")
+            return
+        folder = guide.suggested_folder_name if guide else "InstalledGame"
+        dest = suggested_install_directory(game_save, folder_name=folder)
+        try:
+            dest.mkdir(parents=True, exist_ok=True)
+            reveal_in_explorer(str(dest), select_file=False)
+            self._log_line(f"已创建并打开建议安装目录：{dest}", "success")
+        except OSError as exc:
+            QMessageBox.warning(self, "创建失败", str(exc))
+
+    def _consolidate_loose_install(self) -> None:
+        game_save = self._game_save_dir()
+        if not game_save:
+            QMessageBox.information(self, "提示", "请先在目录配置中设置「游戏库目录」。")
+            return
+        cluster = detect_loose_install_at_root(game_save)
+        if cluster is None:
+            QMessageBox.information(
+                self,
+                "无需整理",
+                "未在游戏库根目录检测到散落的安装文件。\n"
+                "若游戏已在子文件夹中，无需此操作。",
+            )
+            return
+        dest_name = cluster.suggested_folder_name
+        guide = self._active_install_guide()
+        if guide is not None:
+            dest_name = guide.suggested_folder_name
+        msg = (
+            f"将把游戏库根目录下 {len(cluster.items)} 项散落文件（含 "
+            f"{cluster.launcher_exe.name}）移动到：\n\n"
+            f"{Path(game_save) / dest_name}\n\n"
+            "不会移动其他已有游戏子文件夹。是否继续？"
+        )
+        if (
+            QMessageBox.question(self, "整理散落安装", msg) != QMessageBox.StandardButton.Yes
+        ):
+            return
+        result = consolidate_loose_install(game_save, folder_name=dest_name)
+        if result.success:
+            self._log_line(
+                f"已整理到 {result.destination}：{', '.join(result.moved)}",
+                "success",
+            )
+            self._toast("散落安装已整理到子文件夹", "success")
+            try:
+                reveal_in_explorer(result.destination, select_file=False)
+            except OSError:
+                pass
+        else:
+            self._log_line(f"整理失败：{result.error}", "error")
+            QMessageBox.warning(self, "整理失败", result.error or "未知错误")
+
+    def _open_installer_in_explorer(self) -> None:
+        guide = self._active_install_guide()
+        if guide is None:
+            return
+        path = guide.installer_path
+        if path is None:
+            QMessageBox.information(
+                self,
+                "未找到安装程序",
+                "未在解压目录中找到 setup.exe。\n请打开解压目录手动查找安装程序。",
+            )
+            self._open_extract_dir_in_explorer()
+            return
+        try:
+            reveal_in_explorer(str(path), select_file=True)
+        except OSError:
+            try:
+                reveal_in_explorer(str(path.parent), select_file=False)
+                self._log_line(
+                    f"无法在资源管理器中选中文件，已打开所在文件夹：{path.parent}",
+                    "warning",
+                )
+            except OSError as exc:
+                QMessageBox.warning(self, "打开失败", str(exc))
+        except FileNotFoundError:
+            QMessageBox.warning(self, "打开失败", f"文件不存在：\n{path}")
+
+    def _run_installer(self) -> None:
+        guide = self._active_install_guide()
+        if guide is None or guide.installer_path is None:
+            QMessageBox.information(self, "提示", "未找到可运行的 setup.exe。")
+            return
+        try:
+            launch_executable(guide.installer_path)
+            self._log_line(
+                f"已启动安装程序：{guide.installer_path}（工作目录：{guide.installer_path.parent}）",
+                "success",
+            )
+        except OSError as exc:
+            QMessageBox.warning(self, "启动失败", str(exc))
+
+    def _open_extract_dir_in_explorer(self) -> None:
+        guide = self._current_install_guide
+        if guide is None or not guide.extract_dir:
+            target = read_directory_config().get("target", "").strip()
+        else:
+            target = guide.extract_dir
+        if not target:
+            QMessageBox.information(self, "提示", "请先在目录配置中设置「解压输出」。")
+            return
+        p = Path(target)
+        if not p.is_dir():
+            QMessageBox.warning(self, "打开失败", f"目录不存在：\n{p}")
+            return
+        reveal_in_explorer(str(p), select_file=False)
+
+    def _goto_main_add_scan_root(self) -> None:
+        self._log_line("请在主界面「库」分组中点击「添加目录」，选择安装完成后的游戏文件夹。", "info")
+        self._toast("安装完成后请添加扫描目录", "info")
+        manage = getattr(self._main, "_manage_scan_roots", None)
+        if callable(manage):
+            self.accept()
+            manage()
+        else:
+            QMessageBox.information(
+                self,
+                "添加扫描目录",
+                "请关闭本窗口，在主界面第一行「库」分组点击「添加目录」，"
+                "选择你安装游戏时使用的文件夹。",
+            )
 
     # ---------- helper bar ----------
     def _build_helper_bar(self) -> QFrame:
@@ -386,6 +724,12 @@ class AutoExtractDialog(QDialog):
         if path:
             self._single_file.setText(path)
 
+    def _open_password_manager(self) -> None:
+        from app.ui.dialogs.password_manager_dialog import PasswordManagerDialog
+
+        dlg = PasswordManagerDialog(self)
+        dlg.exec()
+
     def _run_single(self) -> None:
         if self._running:
             return
@@ -421,7 +765,14 @@ class AutoExtractDialog(QDialog):
             )
             if result.used_password:
                 self._log_line(f"使用密码：{result.used_password}", "info")
-            self._toast("解压完成", "success")
+            self._maybe_show_install_guide_from_result(result)
+            guide = guide_from_post_process(
+                result.post_process, extract_dir=result.extract_dir
+            )
+            if guide is not None:
+                self._toast("解压完成，请按提示安装游戏", "warning")
+            else:
+                self._toast("解压完成", "success")
         else:
             self._log_line(f"失败：{result.error or '未知错误'}", "error")
             self._show_error("解压失败", result.error or "未知错误")
@@ -493,6 +844,9 @@ class AutoExtractDialog(QDialog):
             if payload.get("success"):
                 self._scan_counts["success"] += 1
                 self._log_line(f"✓ {name} → {payload.get('message', '')}", "success")
+                guide = guide_from_progress_payload(payload)
+                if guide is not None:
+                    self._show_install_guide(guide)
             else:
                 self._scan_counts["failed"] += 1
                 self._log_line(f"✗ {name}：{payload.get('message', '未知错误')}", "error")

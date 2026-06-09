@@ -37,6 +37,43 @@ _DEFAULT_BACKUP_COUNT = 5
 _configured: bool = False
 _log_file: Path | None = None
 
+# Global callback list for bridging standard logging to LogWindow
+_log_bridge_callbacks: list = []
+
+
+def add_log_bridge(callback) -> None:
+    """Register a callback to receive all standard logging messages.
+
+    The callback signature is: callback(level_name: str, message: str, timestamp: float)
+    This bridges standard Python logging to the GUI LogWindow.
+    """
+    if callback not in _log_bridge_callbacks:
+        _log_bridge_callbacks.append(callback)
+
+
+def remove_log_bridge(callback) -> None:
+    """Remove a previously registered log bridge callback."""
+    if callback in _log_bridge_callbacks:
+        _log_bridge_callbacks.remove(callback)
+
+
+class _BridgeHandler(logging.Handler):
+    """Custom logging handler that forwards all log records to bridge callbacks."""
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            msg = self.format(record)
+            level_name = record.levelname
+            import time
+            ts = getattr(record, 'created', time.time())
+            for cb in list(_log_bridge_callbacks):
+                try:
+                    cb(level_name, msg, ts)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
 
 def log_file_path(data_dir: Path) -> Path:
     """Path to the primary rotating application log (may not exist yet)."""
@@ -145,6 +182,13 @@ def setup_logging(
         _log_file = None
 
     _quiet_noisy_libraries()
+
+    # Bridge handler: forwards all standard logging to LogWindow via callbacks
+    bridge = _BridgeHandler()
+    bridge.setLevel(resolved_level)
+    bridge.setFormatter(formatter)
+    bridge._lgm_managed = True  # type: ignore[attr-defined]
+    root.addHandler(bridge)
     _configured = True
 
     logging.getLogger(__name__).debug(

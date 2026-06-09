@@ -87,6 +87,11 @@ class LogWindow(QDialog):
         self._clear_btn = QPushButton("清空日志")
         self._clear_btn.clicked.connect(self._clear_log)
         header.addWidget(self._clear_btn)
+
+        self._open_dir_btn = QPushButton("打开日志目录")
+        self._open_dir_btn.setToolTip("打开日志文件所在目录")
+        self._open_dir_btn.clicked.connect(self._open_log_dir)
+        header.addWidget(self._open_dir_btn)
         
         self._filter_btn = QPushButton("筛选")
         self._filter_btn.clicked.connect(self._show_filter_menu)
@@ -125,15 +130,36 @@ class LogWindow(QDialog):
 
     def _setup_log_listener(self) -> None:
         self.new_log.connect(self._add_log_entry)
-        
+
         from app.services.log_service import LogService, LogLevel
-        
+
         def on_log(level: LogLevel, message: str, timestamp: float) -> None:
             entry = LogEntry(level, message, timestamp)
             self.new_log.emit(entry)
-        
+
         self._log_callback = on_log
         LogService.get_instance().add_callback(on_log)
+
+        # Bridge: receive all standard Python logging messages
+        from app.services.logging_setup import add_log_bridge
+
+        _LEVEL_MAP = {
+            "DEBUG": LogLevel.DEBUG,
+            "INFO": LogLevel.INFO,
+            "WARNING": LogLevel.WARNING,
+            "WARN": LogLevel.WARNING,
+            "ERROR": LogLevel.ERROR,
+            "CRITICAL": LogLevel.ERROR,
+            "SUCCESS": LogLevel.SUCCESS,
+        }
+
+        def on_standard_log(level_name: str, message: str, timestamp: float) -> None:
+            level = _LEVEL_MAP.get(level_name, LogLevel.INFO)
+            entry = LogEntry(level, message, timestamp)
+            self.new_log.emit(entry)
+
+        self._bridge_callback = on_standard_log
+        add_log_bridge(on_standard_log)
 
     def _toggle_auto_scroll(self) -> None:
         self._auto_scroll = self._auto_scroll_check.isChecked()
@@ -145,6 +171,21 @@ class LogWindow(QDialog):
 
     def _show_filter_menu(self) -> None:
         pass
+
+    def _open_log_dir(self) -> None:
+        """Open the log file directory in the system file explorer."""
+        try:
+            from app.services.app_data_dir import get_app_data_dir
+            from app.services.logging_setup import log_file_path
+            data_dir = get_app_data_dir()
+            log_path = log_file_path(data_dir)
+            log_dir = log_path.parent
+            log_dir.mkdir(parents=True, exist_ok=True)
+            from app.utils.file_ops import reveal_in_explorer
+            reveal_in_explorer(str(log_dir))
+        except Exception as e:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "无法打开", f"无法打开日志目录:\n{e}")
 
     def _add_log_entry(self, entry: LogEntry) -> None:
         self._log_buffer.append(entry)

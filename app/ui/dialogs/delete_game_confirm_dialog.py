@@ -36,7 +36,6 @@ class DeleteGameConfirmDialog(QDialog):
             "及软件内的封面/存档备份缓存。"
         )
         detail.setWordWrap(True)
-        detail.setStyleSheet("color: #93A1B6; font-size: 12px;")
         layout.addWidget(detail)
 
         self._delete_install_check = QCheckBox("同时删除游戏安装文件夹（不可恢复）")
@@ -45,7 +44,6 @@ class DeleteGameConfirmDialog(QDialog):
             self._delete_install_check.setToolTip(install_dir)
             path_label = QLabel(f"安装目录：{install_dir}")
             path_label.setWordWrap(True)
-            path_label.setStyleSheet("color: #6B7A8F; font-size: 11px;")
             layout.addWidget(path_label)
         else:
             self._delete_install_check.setEnabled(False)

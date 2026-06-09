@@ -174,7 +174,7 @@ class SaveManagerWindow(QDialog):
         )
         hint.setWordWrap(True)
         hint.setTextFormat(Qt.TextFormat.RichText)
-        hint.setStyleSheet("color:#93A1B6;font-size:12px;")
+        hint.setStyleSheet("font-size:12px;")
         root.addWidget(hint)
 
         tw_group = QGroupBox("2DFan 线索库（全局 · 与仓库内爬虫联动）")
@@ -186,7 +186,7 @@ class SaveManagerWindow(QDialog):
         )
         tw_intro.setWordWrap(True)
         tw_intro.setTextFormat(Qt.TextFormat.RichText)
-        tw_intro.setStyleSheet("color:#93A1B6;font-size:11px;")
+        tw_intro.setStyleSheet("font-size:11px;")
         tw_lay.addWidget(tw_intro)
 
         tw_row = QHBoxLayout()
@@ -209,7 +209,7 @@ class SaveManagerWindow(QDialog):
 
         self._twodfan_stats = QLabel("")
         self._twodfan_stats.setWordWrap(True)
-        self._twodfan_stats.setStyleSheet("color:#7FA7D9;font-size:11px;")
+        self._twodfan_stats.setStyleSheet("font-size:11px;")
         tw_lay.addWidget(self._twodfan_stats)
 
         tw_links = QHBoxLayout()
@@ -269,7 +269,7 @@ class SaveManagerWindow(QDialog):
         self._progress.setVisible(False)
         prog_row.addWidget(self._progress, 1)
         self._progress_label = QLabel("")
-        self._progress_label.setStyleSheet("color:#93A1B6;font-size:11px;")
+        self._progress_label.setStyleSheet("font-size:11px;")
         prog_row.addWidget(self._progress_label)
         root.addLayout(prog_row)
 

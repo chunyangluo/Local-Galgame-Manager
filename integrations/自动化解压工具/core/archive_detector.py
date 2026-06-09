@@ -51,6 +51,10 @@ COMPOUND_PATTERNS: list[tuple[str, str]] = [
 SPLIT_VOLUME_RE = re.compile(r"^(.*)\.e(\d+)$", re.IGNORECASE)
 SFX_EXE_RE = re.compile(r"^(.*)\.exe$", re.IGNORECASE)
 SEVENZ_SPLIT_RE = re.compile(r"^(.*)\.(\d{3})$", re.IGNORECASE)
+# RAR multi-part: basename.part1.rar, basename.part2.rar, … (also .part01.rar etc.)
+RAR_MULTI_PART_RE = re.compile(r"^(.*)\.part(\d+)\.rar$", re.IGNORECASE)
+# RAR old-style split: basename.r00, basename.r01, …
+RAR_OLD_SPLIT_RE = re.compile(r"^(.*)\.r(\d+)$", re.IGNORECASE)
 
 DOWNLOAD_TEMP_SUFFIXES: list[str] = [
     ".baiduyun.p.downloading",
@@ -378,6 +382,125 @@ def is_7z_split_part(file_path: str | Path) -> Optional[dict]:
     first_part = None
     for search_path in search_paths:
         candidate = search_path / f"{base_stem}.001"
+        if candidate.exists():
+            first_part = str(candidate.resolve())
+            break
+
+    if first_part:
+        return {"base_stem": base_stem, "part_num": part_num, "first_part": first_part}
+
+    return None
+
+
+def detect_rar_multipart_volume_set(file_path: str | Path) -> Optional[dict]:
+    """Detect RAR multi-part archives (basename.part1.rar, basename.part2.rar, …).
+
+    Also handles basename.part01.rar style with zero-padded numbers.
+
+    Returns dict with keys: type, base_name, extract_entry, all_files, volume_count.
+    Only the first part (part1) should be used for extraction; 7za handles the rest.
+    """
+    p = Path(file_path).resolve()
+    name = p.name
+    parent = p.parent
+
+    match = RAR_MULTI_PART_RE.match(name)
+    if not match:
+        return None
+
+    base_stem = match.group(1)
+    part_num = int(match.group(2))
+
+    # Only trigger detection from part1
+    if part_num != 1:
+        return None
+
+    # Find all parts in the same directory (and optionally in the archive dir)
+    search_paths = [parent]
+    try:
+        from core.config import get_settings
+        settings = get_settings()
+        archive_dir = Path(settings.directories.archive)
+        if archive_dir.exists() and archive_dir != parent:
+            search_paths.append(archive_dir)
+    except Exception:
+        pass
+
+    # Determine zero-padding width from the first part
+    raw_num = match.group(2)
+    pad_width = len(raw_num) if len(raw_num) > 1 else 0  # 0 means no padding
+
+    all_parts: list[str] = []
+    part_index = 1
+    while True:
+        if pad_width > 0:
+            part_name = f"{base_stem}.part{part_index:0{pad_width}d}.rar"
+        else:
+            part_name = f"{base_stem}.part{part_index}.rar"
+
+        found = False
+        for search_path in search_paths:
+            candidate = search_path / part_name
+            if candidate.exists():
+                all_parts.append(str(candidate.resolve()))
+                found = True
+                break
+        if not found:
+            break
+        part_index += 1
+
+    if len(all_parts) < 1:
+        return None
+
+    return {
+        "type": "rar_multipart",
+        "base_name": base_stem,
+        "extract_entry": all_parts[0],  # part1.rar
+        "all_files": all_parts,
+        "volume_count": len(all_parts),
+    }
+
+
+def is_rar_multipart_part(file_path: str | Path) -> Optional[dict]:
+    """Check if a file is a non-first part of a RAR multi-part archive.
+
+    Returns dict with base_stem, part_num, first_part if so.
+    """
+    p = Path(file_path).resolve()
+    name = p.name
+
+    match = RAR_MULTI_PART_RE.match(name)
+    if not match:
+        return None
+
+    base_stem = match.group(1)
+    part_num = int(match.group(2))
+
+    if part_num == 1:
+        return None
+
+    # Find part1
+    raw_num = match.group(2)
+    pad_width = len(raw_num) if len(raw_num) > 1 else 0
+
+    search_paths = [p.parent]
+    try:
+        from core.config import get_settings
+        settings = get_settings()
+        archive_dir = Path(settings.directories.archive)
+        if archive_dir.exists():
+            search_paths.append(archive_dir)
+    except Exception:
+        pass
+
+    if pad_width > 0:
+        first_name = f"{base_stem}.part{1:0{pad_width}d}.rar"
+    else:
+        first_name = f"{base_stem}.part1.rar"
+
+    first_part = None
+    for search_path in search_paths:
+        candidate = search_path / first_name
         if candidate.exists():
             first_part = str(candidate.resolve())
             break

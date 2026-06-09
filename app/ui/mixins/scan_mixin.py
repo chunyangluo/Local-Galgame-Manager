@@ -56,6 +56,11 @@ class ScanMixin:
         self._skip_scan_message = True
         self._scan_all()
 
+    def _scan_incremental_and_vndb_import(self) -> None:
+        """增量扫描并自动执行增量VNDB导入"""
+        self._skip_scan_message = True
+        self._scan_incremental()
+
     def _scan_all(self) -> None:
         if self._scan_running:
             self.status.setText("正在扫描中，请稍候...")
@@ -161,6 +166,12 @@ class ScanMixin:
                 row for row in rows if normalize_game_dir(row[1]) not in existing_dirs
             ]
             skipped_count = len(rows) - len(new_rows)
+
+            # Detect dead links (games whose folders no longer exist)
+            dead_games = self.db.list_dead_games()
+            if dead_games:
+                self._prompt_clean_dead_links(dead_games)
+
             if skipped_count > 0:
                 self.status.setText(f"增量扫描：已跳过 {skipped_count} 个已有游戏")
             rows = new_rows
@@ -184,6 +195,53 @@ class ScanMixin:
     def _clear_scan_worker(self) -> None:
         self._scan_worker = None
         self._scan_thread = None
+
+    def _prompt_clean_dead_links(self, dead_games: list) -> None:
+        """Prompt user to clean up dead links (games whose folders were deleted)."""
+        from PySide6.QtWidgets import QMessageBox
+
+        import logging
+        log = logging.getLogger(__name__)
+
+        count = len(dead_games)
+        names = [g.name or g.root_dir for g in dead_games[:10]]
+        name_list = "\n".join(f"  • {n}" for n in names)
+        if count > 10:
+            name_list += f"\n  … 还有 {count - 10} 个"
+
+        msg = (
+            f"检测到 {count} 个游戏的文件夹已不存在（死链接）：\n\n"
+            f"{name_list}\n\n"
+            f"是否清理这些无效记录？\n"
+            f"• 「清理」— 删除无自定义数据的死链接\n"
+            f"• 「全部清理」— 删除所有死链接（含自定义数据）\n"
+            f"• 「跳过」— 保留，稍后在数据管理中手动清理"
+        )
+
+        box = QMessageBox(self)
+        box.setWindowTitle("检测到死链接")
+        box.setText(msg)
+        btn_clean = box.addButton("清理（保留自定义数据）", QMessageBox.AcceptRole)
+        btn_clean_all = box.addButton("全部清理", QMessageBox.DestructiveRole)
+        btn_skip = box.addButton("跳过", QMessageBox.RejectRole)
+        box.exec()
+
+        clicked = box.clickedButton()
+        if clicked == btn_skip:
+            log.info("User skipped dead link cleanup (%d items)", count)
+            return
+
+        keep_custom = clicked == btn_clean
+        ids = [g.id for g in dead_games]
+        removed = self.db.remove_games_by_ids(ids, keep_custom=keep_custom)
+        kept = count - removed
+        log.info("Cleaned %d dead links (%d kept due to custom data)", removed, kept)
+
+        self.refresh_games()
+        status = f"已清理 {removed} 个死链接"
+        if kept:
+            status += f"，保留 {kept} 个含自定义数据的记录"
+        self.status.setText(status)
 
     def _cancel_scan(self) -> None:
         if self._vndb_worker is not None:

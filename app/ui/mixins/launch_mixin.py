@@ -20,9 +20,16 @@ class LaunchMixin:
     plugin_manager: object
     _launching_game_ids: set[int]
 
-    def is_locale_emulator_usable(self) -> bool:
+    def is_locale_emulator_usable(self, launch_exe: str = "") -> bool:
+        """Check if LE is available (global or local in game dir)."""
         if sys.platform != "win32":
             return False
+        # Check local LEProc.exe in game directory
+        if launch_exe:
+            local_leproc = Path(launch_exe).parent / "LEProc.exe"
+            if local_leproc.is_file():
+                return True
+        # Check global LEProc.exe from settings
         p = self.db.get_locale_emulator_leproc_path().strip()
         if not p:
             return False
@@ -77,23 +84,61 @@ class LaunchMixin:
         if game is None:
             QMessageBox.warning(parent, "未找到游戏", "该游戏记录不存在。")
             return
-        
-        # 确定启动方式
+
+        launch_exe = game.launch_exe
+
+        # ---- 自动修复：如果 launch_exe 不存在，尝试搜索替代 exe ----
+        if launch_exe and not Path(launch_exe).is_file():
+            alt_exe = self.launcher.find_alternative_exe(launch_exe)
+            if alt_exe:
+                log = logging.getLogger(__name__)
+                log.info(
+                    "Launch exe not found (%s), auto-switched to alternative: %s (game_id=%s)",
+                    launch_exe, alt_exe, game_id,
+                )
+                # Update the database with the new exe
+                try:
+                    self.db.update_game_launch_exe(game.id, alt_exe)
+                except Exception:
+                    pass
+                launch_exe = alt_exe
+            else:
+                QMessageBox.warning(
+                    parent, "启动文件不存在",
+                    f"游戏启动文件不存在:\n{launch_exe}\n\n"
+                    "可能游戏已被移动或删除，请右键「编辑名称/路径」修正。",
+                )
+                return
+
+        # ---- 确定启动方式 ----
+        # 策略：
+        # 1. 游戏目录自带 LEProc.exe → 必须用 LE（游戏依赖转区才能运行）
+        # 2. 用户指定 force_le / smart 模式 → 用 LE
+        # 3. 默认普通启动，崩溃后自动用 LE 重试
         use_le = locale_emulator
+        has_local_le = (Path(launch_exe).parent / "LEProc.exe").is_file()
+
         if not use_le and not force_normal:
-            # 检查是否使用智能模式
-            double_click_action = self.db.get_double_click_action()
-            if double_click_action == "force_le":
+            # 游戏目录自带 LE → 直接用 LE 启动
+            if has_local_le:
                 use_le = True
-            elif double_click_action == "smart":
-                # 智能模式：使用上一次启动的方式
-                last_mode = self.db.get_last_launch_mode()
-                use_le = (last_mode == "le")
-        
+            else:
+                double_click_action = self.db.get_double_click_action()
+                if double_click_action == "force_le":
+                    use_le = True
+                elif double_click_action == "smart":
+                    last_mode = self.db.get_last_launch_mode()
+                    use_le = (last_mode == "le")
+
+        # Per-game LE profile: 记录但不强制启用 LE（用于自动重试）
+        per_game_le_profile = ""
+        if hasattr(self.db, 'get_game_le_profile') and not force_normal:
+            per_game_le_profile = self.db.get_game_le_profile(game.id)
+
         launch_decision = self.plugin_manager.modify_launch(
             game_id=game.id,
             game_name=game.name,
-            launch_exe=game.launch_exe,
+            launch_exe=launch_exe,
             locale_emulator=use_le,
             as_admin=as_admin,
         )
@@ -105,7 +150,7 @@ class LaunchMixin:
         as_admin = launch_decision.as_admin
         launch_exe = launch_decision.launch_exe
         if use_le:
-            if not self.is_locale_emulator_usable():
+            if not self.is_locale_emulator_usable(launch_exe=launch_exe):
                 r = QMessageBox.question(
                     parent,
                     "未配置 Locale Emulator",
@@ -119,7 +164,30 @@ class LaunchMixin:
                 if r == QMessageBox.StandardButton.Yes:
                     self._open_locale_emulator_settings()
                 return
-        le_path = self.db.get_locale_emulator_leproc_path().strip() if use_le else ""
+
+        # ---- 准备 LE 资源（即使首次不用 LE，也为自动重试准备） ----
+        le_proc_path = ""
+        le_profile_guid = ""
+        if hasattr(self.db, 'get_locale_emulator_leproc_path'):
+            le_proc_path = self.db.get_locale_emulator_leproc_path().strip()
+
+        if (le_proc_path or has_local_le) and not force_normal:
+            try:
+                from app.services.le_config_service import (
+                    ensure_le_config, find_le_profile_guid,
+                )
+                profile = per_game_le_profile or "ja-JP"
+                # 生成/更新 .le.config（优先使用本地 LEConfig.xml 的 GUID）
+                ensure_le_config(launch_exe, profile, leproc_path=le_proc_path)
+                # 仅当没有本地 .le.config 时才需要 -runas GUID
+                local_le_config = Path(launch_exe).parent / f"{Path(launch_exe).name}.le.config"
+                if not local_le_config.exists():
+                    le_profile_guid = find_le_profile_guid(
+                        le_proc_path, profile, target_exe=launch_exe
+                    ) or ""
+            except Exception:
+                pass
+
         if self.auto_backup_before_launch:
             self._auto_backup_save_before_launch(game)
         uid = self.current_user_id
@@ -140,11 +208,12 @@ class LaunchMixin:
             self.launcher,
             launch_exe=launch_exe,
             locale_emulator=use_le,
-            le_proc_path=le_path,
+            le_proc_path=le_proc_path,
             as_admin=as_admin,
             game_id=game.id,
             game_name=game.name,
             signal_parent=self,
+            le_profile=le_profile_guid,
         )
         task.signals.finished.connect(
             lambda gid, dur, name, used_le_flag, u=uid, mp=message_parent: self._on_game_launch_finished(
@@ -153,7 +222,11 @@ class LaunchMixin:
             Qt.QueuedConnection,
         )
         task.signals.failed.connect(
-            lambda msg, mp=message_parent: self._on_game_launch_failed(mp, msg),
+            lambda msg, mp=message_parent, gid=game_id: self._on_game_launch_failed(mp, msg, game_id=gid),
+            Qt.QueuedConnection,
+        )
+        task.signals.retry_started.connect(
+            lambda gid, method: self._on_launch_retry_started(gid, method),
             Qt.QueuedConnection,
         )
         task.signals.window_title_captured.connect(
@@ -197,12 +270,52 @@ class LaunchMixin:
             logging.getLogger(__name__).exception("record_play after launch")
             QMessageBox.critical(parent, "记录游玩失败", str(exc))
 
-    def _on_game_launch_failed(self, message_parent, message: str) -> None:
-        for gid in list(self._launching_game_ids):
-            self._remove_launching_game(gid)
+    def _on_game_launch_failed(self, message_parent, message: str, *, game_id: int = 0) -> None:
+        if game_id:
+            self._remove_launching_game(game_id)
+        else:
+            for gid in list(self._launching_game_ids):
+                self._remove_launching_game(gid)
         parent = self._message_box_parent(message_parent)
         self.status.setText("启动失败")
-        QMessageBox.critical(parent, "启动失败", message)
+
+        # Provide retry options
+        retry_options = []
+        if self.is_locale_emulator_usable():
+            retry_options.append("LE 转区启动")
+        retry_options.append("管理员启动")
+        retry_options.append("调试启动")
+
+        msg = QMessageBox(parent)
+        msg.setIcon(QMessageBox.Critical)
+        msg.setWindowTitle("启动失败")
+        msg.setText(message)
+        msg.setInformativeText("可以尝试以下方式重新启动：")
+
+        for opt in retry_options:
+            btn = msg.addButton(opt, QMessageBox.ActionRole)
+        msg.addButton("关闭", QMessageBox.RejectRole)
+
+        msg.exec()
+        clicked = msg.clickedButton()
+
+        if not game_id:
+            return
+
+        btn_text = clicked.text() if clicked else ""
+        if btn_text == "LE 转区启动":
+            self.launch_game_by_id(game_id, locale_emulator=True, message_parent=message_parent)
+        elif btn_text == "管理员启动":
+            self.launch_game_by_id(game_id, as_admin=True, message_parent=message_parent)
+        elif btn_text == "调试启动":
+            self.debug_launch_game(game_id, parent=message_parent)
+
+    def _on_launch_retry_started(self, game_id: int, method: str) -> None:
+        """Auto-retry callback: update status bar."""
+        method_text = "LE 转区" if method == "le" else "普通"
+        game = self.db.get_game_by_id(self.current_user_id, game_id)
+        name = game.name if game else f"#{game_id}"
+        self.status.setText(f"自动重试（{method_text}）: {name}…")
 
     def _launch_selected(self, as_admin: bool = False) -> None:
         game = self._selected_game()
@@ -235,3 +348,69 @@ class LaunchMixin:
                 return
         self.db.set_locale_emulator_leproc_path(path)
         self.status.setText("已保存 Locale Emulator 路径" if path else "已清除 Locale Emulator 配置")
+
+    def debug_launch_game(self, game_id: int, *, parent=None) -> None:
+        """调试启动：测试游戏能否启动，显示详细诊断信息。"""
+        from PySide6.QtWidgets import QWidget
+        from app.ui.dialogs.debug_launch_dialog import DebugLaunchResultDialog
+
+        msg_parent = self._message_box_parent(parent)
+        game = self.db.get_game_by_id(self.current_user_id, game_id)
+        if game is None:
+            QMessageBox.warning(msg_parent, "未找到游戏", "该游戏记录不存在。")
+            return
+
+        launch_exe = game.launch_exe
+        use_le = False
+        leproc_exe = ""
+        le_profile_guid = ""
+
+        # Check per-game LE profile
+        if hasattr(self.db, 'get_game_le_profile'):
+            le_profile = self.db.get_game_le_profile(game.id)
+            if le_profile:
+                use_le = True
+                leproc_exe = self.db.get_locale_emulator_leproc_path().strip()
+                if not leproc_exe or not Path(leproc_exe).is_file():
+                    use_le = False  # LE not configured, fall back to normal
+                else:
+                    try:
+                        from app.services.le_config_service import (
+                            ensure_le_config, find_le_profile_guid,
+                        )
+                        ensure_le_config(launch_exe, le_profile, leproc_path=leproc_exe)
+                        # Only use -runas when no local .le.config exists
+                        local_le_config = Path(launch_exe).parent / f"{Path(launch_exe).name}.le.config"
+                        if not local_le_config.exists():
+                            le_profile_guid = find_le_profile_guid(
+                                leproc_exe, le_profile, target_exe=launch_exe
+                            ) or ""
+                    except Exception:
+                        pass
+
+        self.status.setText(f"调试启动中: {game.name}…")
+        QApplication.processEvents()
+
+        try:
+            result = self.launcher.debug_launch(
+                launch_exe,
+                use_le=use_le,
+                leproc_exe=leproc_exe,
+                le_profile_guid=le_profile_guid,
+            )
+        except Exception as exc:
+            result = {
+                "exe_path": launch_exe,
+                "use_le": use_le,
+                "started": False,
+                "exit_code": None,
+                "duration_seconds": 0,
+                "stdout": "",
+                "stderr": "",
+                "error_message": str(exc),
+                "suggestions": ["启动过程中发生异常，请检查游戏文件是否完整"],
+            }
+
+        self.status.setText(f"调试启动完成: {game.name}")
+        dlg = DebugLaunchResultDialog(result, game_name=game.name, parent=msg_parent)
+        dlg.exec()

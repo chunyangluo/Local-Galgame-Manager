@@ -32,6 +32,7 @@ class GameRecord:
     source: str | None = None
     custom_save_root: str | None = None
     window_title: str | None = None
+    hidden: bool = False
 
 
 @dataclass
@@ -178,6 +179,15 @@ class Database:
                 FOREIGN KEY(game_id) REFERENCES games(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS hidden_games (
+                user_id INTEGER NOT NULL,
+                game_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY(user_id, game_id),
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+                FOREIGN KEY(game_id) REFERENCES games(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS play_records (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
@@ -242,6 +252,8 @@ class Database:
             self.conn.execute("ALTER TABLE games ADD COLUMN custom_save_root TEXT")
         if "window_title" not in cols:
             self.conn.execute("ALTER TABLE games ADD COLUMN window_title TEXT")
+        if "le_profile" not in cols:
+            self.conn.execute("ALTER TABLE games ADD COLUMN le_profile TEXT DEFAULT ''")
 
     def _ensure_save_backup_schema(self) -> None:
         self.conn.executescript(
@@ -755,6 +767,7 @@ class Database:
             last_played_at=None,
             play_count=0,
             total_play_seconds=0,
+            hidden=False,
             vndb_id=row["vndb_id"],
             title_original=row["title_original"],
             title_localized=row["title_localized"],
@@ -778,6 +791,19 @@ class Database:
             WHERE id = ?
             """,
             (name, launch_exe, now, game_id),
+        )
+        self.conn.commit()
+
+    def update_game_launch_exe(self, game_id: int, launch_exe: str) -> None:
+        """Update the launch exe for a game (sets custom_launch_exe)."""
+        now = datetime.utcnow().isoformat()
+        self.conn.execute(
+            """
+            UPDATE games
+            SET custom_launch_exe = ?, updated_at = ?
+            WHERE id = ?
+            """,
+            (launch_exe, now, game_id),
         )
         self.conn.commit()
 
@@ -838,19 +864,21 @@ class Database:
                 NULLIF(TRIM(g.custom_save_root), '') AS custom_save_root,
                 g.window_title,
                 CASE WHEN f.game_id IS NULL THEN 0 ELSE 1 END AS favorite,
+                CASE WHEN h.game_id IS NULL THEN 0 ELSE 1 END AS hidden,
                 COALESCE(GROUP_CONCAT(c.name, ','), '') AS categories,
                 MAX(p.started_at) AS last_played_at,
                 COALESCE(COUNT(p.id), 0) AS play_count,
                 COALESCE(SUM(p.duration_seconds), 0) AS total_play_seconds
             FROM games g
             LEFT JOIN favorites f ON f.game_id = g.id AND f.user_id = ?
+            LEFT JOIN hidden_games h ON h.game_id = g.id AND h.user_id = ?
             LEFT JOIN game_categories gc ON gc.game_id = g.id
             LEFT JOIN categories c ON c.id = gc.category_id AND c.user_id = ?
             LEFT JOIN play_records p ON p.game_id = g.id AND p.user_id = ?
             GROUP BY g.id
             ORDER BY g.updated_at DESC
             """,
-            (user_id, user_id, user_id),
+            (user_id, user_id, user_id, user_id),
         ).fetchall()
         return [
             GameRecord(
@@ -860,6 +888,7 @@ class Database:
                 launch_exe=str(r["launch_exe"]),
                 cover_path=r["cover_path"],
                 favorite=bool(r["favorite"]),
+                hidden=bool(r["hidden"]),
                 categories=str(r["categories"]),
                 last_played_at=r["last_played_at"],
                 play_count=int(r["play_count"]),
@@ -890,6 +919,40 @@ class Database:
 
         rows = self.conn.execute("SELECT root_dir FROM games").fetchall()
         return {normalize_game_dir(str(r["root_dir"])) for r in rows}
+
+    def list_dead_games(self, user_id: int = 1) -> list[GameRecord]:
+        """Return games whose ``root_dir`` no longer exists on disk.
+
+        Used to detect and clean up dead links from manually deleted folders.
+        """
+        from pathlib import Path
+
+        games = self.list_games(user_id)
+        return [g for g in games if not Path(g.root_dir).is_dir()]
+
+    def remove_games_by_ids(self, game_ids: list[int], *, keep_custom: bool = True) -> int:
+        """Remove multiple games by ID. Returns count of removed games.
+
+        If *keep_custom* is True, games with custom data (custom_name,
+        custom_cover_path, custom_save_root) are skipped.
+        """
+        if not game_ids:
+            return 0
+        removed = 0
+        for gid in game_ids:
+            if keep_custom:
+                row = self.conn.execute(
+                    "SELECT custom_name, custom_cover_path, custom_save_root FROM games WHERE id = ?",
+                    (gid,),
+                ).fetchone()
+                if row and (row["custom_name"] or row["custom_cover_path"] or row["custom_save_root"]):
+                    continue
+            # Clean up related records
+            self.conn.execute("DELETE FROM play_records WHERE game_id = ?", (gid,))
+            self.conn.execute("DELETE FROM games WHERE id = ?", (gid,))
+            removed += 1
+        self.conn.commit()
+        return removed
 
     def get_game_by_id(self, user_id: int, game_id: int) -> GameRecord | None:
         """Return one game with the same fields as list_games.
@@ -1047,6 +1110,19 @@ class Database:
         else:
             self.conn.execute(
                 "DELETE FROM favorites WHERE user_id = ? AND game_id = ?",
+                (user_id, game_id),
+            )
+        self.conn.commit()
+
+    def set_hidden(self, user_id: int, game_id: int, value: bool) -> None:
+        if value:
+            self.conn.execute(
+                "INSERT OR IGNORE INTO hidden_games (user_id, game_id, created_at) VALUES (?, ?, ?)",
+                (user_id, game_id, datetime.utcnow().isoformat()),
+            )
+        else:
+            self.conn.execute(
+                "DELETE FROM hidden_games WHERE user_id = ? AND game_id = ?",
                 (user_id, game_id),
             )
         self.conn.commit()
@@ -1295,3 +1371,17 @@ class Database:
             size_bytes=int(row["size_bytes"] or 0),
             checksum_sha256=(str(row["checksum_sha256"]) if row["checksum_sha256"] else None),
         )
+
+    def get_game_le_profile(self, game_id: int) -> str:
+        row = self.conn.execute("SELECT le_profile FROM games WHERE id = ?", (game_id,)).fetchone()
+        if row is None or row["le_profile"] is None:
+            return ""
+        return str(row["le_profile"]).strip()
+
+    def set_game_le_profile(self, game_id: int, profile: str) -> None:
+        now = datetime.utcnow().isoformat()
+        self.conn.execute(
+            "UPDATE games SET le_profile = ?, updated_at = ? WHERE id = ?",
+            (profile.strip(), now, game_id),
+        )
+        self.conn.commit()

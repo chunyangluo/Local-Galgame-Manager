@@ -31,6 +31,38 @@ class GameActionMixin:
         self.db.set_favorite(self.current_user_id, game.id, not game.favorite)
         self.refresh_games()
 
+    def _toggle_hidden(self) -> None:
+        game = self._selected_game()
+        if game is None:
+            return
+        self._toggle_hidden_for_record(game)
+
+    def _toggle_hidden_for_record(self, game: GameRecord) -> None:
+        new_hidden = not game.hidden
+        self.db.set_hidden(self.current_user_id, game.id, new_hidden)
+        self.refresh_games()
+        if new_hidden:
+            self.status.setText(f"已隐藏: {game.name}")
+        else:
+            self.status.setText(f"已取消隐藏: {game.name}")
+
+    def _apply_show_hidden_games_ui(self) -> None:
+        show = bool(self.show_hidden_games)
+        self.act_show_hidden.setChecked(show)
+        tag = "ON" if show else "OFF"
+        self.act_show_hidden.setText(f"👁 显示隐藏游戏: {tag}")
+        self.act_show_hidden.setToolTip(
+            f"当前: {'已显示' if show else '已隐藏'} — 点击切换"
+        )
+
+    def _toggle_show_hidden_games(self) -> None:
+        self.show_hidden_games = not self.show_hidden_games
+        self._apply_show_hidden_games_ui()
+        self._apply_filters()
+        self.status.setText(
+            "已显示隐藏游戏" if self.show_hidden_games else "已隐藏列表中的隐藏游戏"
+        )
+
     def _fix_launch_exe(self) -> None:
         game = self._selected_game()
         if game is None:
@@ -189,14 +221,21 @@ class GameActionMixin:
             self.system_service.set_startup(not enabled)
             self._refresh_startup_state()
             self.status.setText("已更新开机自启设置")
+        except PermissionError:
+            QMessageBox.warning(
+                self, "权限不足",
+                "无法修改开机启动项。\n\n请以管理员身份运行本程序后重试。",
+            )
         except Exception as exc:
             QMessageBox.critical(self, "设置失败", str(exc))
 
     def _apply_auto_backup_launch_ui(self) -> None:
         enabled = bool(self.auto_backup_before_launch)
         self.act_auto_backup.setChecked(enabled)
-        self.act_auto_backup.setText(
-            f"启动前备份: {'ON' if enabled else 'OFF'}"
+        tag = "ON" if enabled else "OFF"
+        self.act_auto_backup.setText(f"💾 启动前备份: {tag}")
+        self.act_auto_backup.setToolTip(
+            f"当前: {'已开启' if enabled else '已关闭'} — 点击切换"
         )
 
     def _toggle_auto_backup_before_launch(self) -> None:
@@ -288,6 +327,17 @@ class GameActionMixin:
 
         AutoExtractDialog(self).exec()
 
+    def _open_fdm_dialog(self) -> None:
+        from app.ui.dialogs.fdm_dialog import FdmDialog
+
+        FdmDialog(self).exec()
+
+    def _open_quick_workflow(self) -> None:
+        from app.ui.dialogs.quick_workflow_dialog import QuickWorkflowDialog
+
+        dlg = QuickWorkflowDialog(self, parent=self)
+        dlg.exec()
+
     def _start_twodfan_crawl(self) -> None:
         from app.ui.dialogs.twodfan_crawl_dialog import TwodfanCrawlDialog
         from app.services.paths import default_twodfan_sqlite_path
@@ -348,6 +398,12 @@ class GameActionMixin:
         )
         admin_action.setToolTip("以管理员权限启动")
 
+        debug_action = menu.addAction("🔧 调试启动")
+        debug_action.triggered.connect(
+            lambda checked=False, gid=game.id: self.debug_launch_game(gid, parent=self)
+        )
+        debug_action.setToolTip("测试游戏能否启动，显示详细诊断信息（退出码、运行时长、建议等）")
+
         menu.addSeparator()
 
         # ===== 第二组：信息管理（高频）=====
@@ -363,6 +419,11 @@ class GameActionMixin:
         fav_action = menu.addAction(fav_text)
         fav_action.triggered.connect(lambda checked=False, g=game: self._toggle_favorite_for_record(g))
         fav_action.setToolTip("将游戏加入/移出收藏")
+
+        hide_text = "👁 取消隐藏" if game.hidden else "🙈 隐藏游戏"
+        hide_action = menu.addAction(hide_text)
+        hide_action.triggered.connect(lambda checked=False, g=game: self._toggle_hidden_for_record(g))
+        hide_action.setToolTip("从列表中隐藏/显示该游戏（Ctrl+H）")
 
         menu.addSeparator()
 

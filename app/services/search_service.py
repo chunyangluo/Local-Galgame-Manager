@@ -12,12 +12,15 @@ class SearchService:
         category: str = "",
         play_state: str = "",
         sort_by: str = "",
+        exclude_hidden: bool = True,
     ) -> list[GameRecord]:
         normalized_query = query.strip().lower()
         normalized_category = category.strip().lower()
         normalized_state = play_state.strip().lower()
         filtered: list[GameRecord] = []
         for game in games:
+            if exclude_hidden and getattr(game, "hidden", False):
+                continue
             if only_favorite and not game.favorite:
                 continue
             if normalized_state == "played" and int(game.play_count or 0) <= 0:

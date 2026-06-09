@@ -51,14 +51,15 @@ class VndbImportResultDialog(QDialog):
         self._outcomes = outcomes
         self._targets = targets or []
         self._selected_records: list[tuple[int, VndbRecord]] = []
-        
+        self._cancelled = cancelled
+
         self._init_ui()
 
     def _init_ui(self) -> None:
         layout = QVBoxLayout(self)
 
         failed = len(self._outcomes) - sum(1 for o in self._outcomes if o.success)
-        status = "已取消" if cancelled else "已完成"
+        status = "已取消" if self._cancelled else "已完成"
         summary = QLabel(
             f"{status}：共 {len(self._outcomes)} 个，成功 {sum(1 for o in self._outcomes if o.success)}，失败 {failed}"
         )

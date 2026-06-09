@@ -10,6 +10,7 @@ def _game(
     gid: int = 1,
     name: str = "Game",
     favorite: bool = False,
+    hidden: bool = False,
     categories: str = "",
 ) -> GameRecord:
     return GameRecord(
@@ -23,6 +24,7 @@ def _game(
         last_played_at=None,
         play_count=0,
         total_play_seconds=0,
+        hidden=hidden,
     )
 
 
@@ -70,6 +72,21 @@ class TestFilterByFavorite:
         games = [_game(1, "A", favorite=False), _game(2, "B", favorite=False)]
         result = svc.filter_games(games, only_favorite=True)
         assert len(result) == 0
+
+
+class TestFilterByHidden:
+    def test_exclude_hidden_by_default(self) -> None:
+        svc = SearchService()
+        games = [_game(1, "Visible"), _game(2, "Hidden", hidden=True)]
+        result = svc.filter_games(games)
+        assert len(result) == 1
+        assert result[0].name == "Visible"
+
+    def test_show_hidden_when_disabled(self) -> None:
+        svc = SearchService()
+        games = [_game(1, "Visible"), _game(2, "Hidden", hidden=True)]
+        result = svc.filter_games(games, exclude_hidden=False)
+        assert len(result) == 2
 
 
 class TestFilterByCategory:

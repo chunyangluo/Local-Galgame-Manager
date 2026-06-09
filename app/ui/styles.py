@@ -207,6 +207,9 @@ QCheckBox::indicator:checked {
     background: #6A9FD8;
     border-color: #6A9FD8;
 }
+QCheckBox::indicator:hover {
+    border-color: #6A9FD8;
+}
 
 /* ===== 列表 ===== */
 QListWidget {
@@ -316,20 +319,48 @@ QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
     height: 0;
 }
 
+QScrollBar:horizontal {
+    height: 6px;
+    background: transparent;
+    border-radius: 3px;
+}
+QScrollBar::handle:horizontal {
+    background: rgba(90, 100, 120, 0.6);
+    border-radius: 3px;
+    min-width: 20px;
+}
+QScrollBar::handle:horizontal:hover {
+    background: rgba(110, 125, 155, 0.8);
+}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
+    width: 0;
+}
+
+/* ===== 工具提示 ===== */
+QToolTip {
+    color: #F2F4F7;
+    background: #2A3040;
+    border: 1px solid #3D4759;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+}
+
 /* ===== 进度条 ===== */
 QProgressBar {
     color: #F2F4F7;
     background: #232A35;
     border: 1px solid #3D4759;
-    border-radius: 4px;
+    border-radius: 6px;
     padding: 1px;
     text-align: center;
     font-size: 11px;
     font-weight: 600;
 }
 QProgressBar::chunk {
-    background: #6A9FD8;
-    border-radius: 3px;
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
+        stop:0 #5B9BFF, stop:1 #6A9FD8);
+    border-radius: 4px;
 }
 
 /* ===== 菜单 ===== */
@@ -419,6 +450,28 @@ QSpinBox {
 QSpinBox:focus {
     border-color: #6A9FD8;
 }
+QSpinBox::up-button, QSpinBox::down-button {
+    background: #2E3644;
+    border: none;
+    width: 16px;
+}
+QSpinBox::up-button:hover, QSpinBox::down-button:hover {
+    background: #3A4558;
+}
+QSpinBox::up-arrow {
+    width: 8px;
+    height: 8px;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-bottom: 5px solid #8B96AA;
+}
+QSpinBox::down-arrow {
+    width: 8px;
+    height: 8px;
+    border-left: 4px solid transparent;
+    border-right: 4px solid transparent;
+    border-top: 5px solid #8B96AA;
+}
 
 /* ===== Text Edit / Plain Text Edit ===== */
 QTextEdit {
@@ -459,5 +512,40 @@ QHeaderView::section {
     padding: 6px 8px;
     font-weight: 600;
     font-size: 12px;
+}
+
+/* ===== Slider ===== */
+QSlider::groove:horizontal {
+    height: 4px;
+    background: #2E3644;
+    border-radius: 2px;
+}
+QSlider::handle:horizontal {
+    background: #6A9FD8;
+    width: 14px;
+    height: 14px;
+    margin: -5px 0;
+    border-radius: 7px;
+}
+QSlider::handle:horizontal:hover {
+    background: #8AB4E0;
+}
+QSlider::sub-page:horizontal {
+    background: #6A9FD8;
+    border-radius: 2px;
+}
+
+/* ===== Date Edit ===== */
+QDateEdit {
+    color: #F2F4F7;
+    background: #232A35;
+    border: 1px solid #3D4759;
+    border-radius: 6px;
+    padding: 4px 8px;
+    font-size: 12px;
+    min-height: 28px;
+}
+QDateEdit:focus {
+    border-color: #6A9FD8;
 }
 """
