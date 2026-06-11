@@ -5,6 +5,7 @@ from pathlib import Path
 
 from loguru import logger
 
+from core.archive_detector import detect_archive_type
 from core.config import get_settings
 from core.extractor import ExtractResult
 from core.iso_handler import expand_disc_images_in_directory, find_installer_exe
@@ -177,6 +178,11 @@ class FileManager:
         ".ypf", ".xp3", ".rpy", ".rpyc", ".rpa", ".rpym",
         ".ks", ".tjs", ".nscripta", ".nscriptdat",
         ".pck", ".dat", ".pak", ".arc", ".bin",
+    }
+
+    VIDEO_EXTENSIONS: set[str] = {
+        ".mp4", ".mkv", ".avi", ".wmv", ".flv",
+        ".mov", ".webm", ".m4v", ".ts", ".m2ts",
     }
 
     @staticmethod
@@ -419,6 +425,67 @@ class FileManager:
 
         return moved
 
+    def detect_video_entries(self, extract_dir: str) -> list[Path]:
+        target = Path(extract_dir).resolve()
+        if not target.exists():
+            return []
+
+        def is_real_video(path: Path) -> bool:
+            if path.suffix.lower() not in self.VIDEO_EXTENSIONS:
+                return False
+            return detect_archive_type(path) is None
+
+        entries: list[Path] = []
+        try:
+            children = list(target.iterdir())
+        except OSError:
+            return []
+
+        for item in children:
+            if item.is_file() and is_real_video(item):
+                entries.append(item)
+            elif item.is_dir():
+                try:
+                    videos = [p for p in item.rglob("*") if p.is_file() and is_real_video(p)]
+                except OSError:
+                    continue
+                if videos:
+                    entries.append(item)
+        return entries
+
+    def move_video_to_save_dir(self, video_entries: list[Path]) -> list[tuple[str, bool]]:
+        if not self._settings.post_process.move_game_dir:
+            return []
+        save_dir = Path(self._settings.directories.game_save)
+        save_dir.mkdir(parents=True, exist_ok=True)
+        moved: list[tuple[str, bool]] = []
+        for entry in video_entries:
+            if not entry.exists():
+                continue
+            dest = self._resolve_video_conflict(save_dir / entry.name)
+            try:
+                shutil.move(str(entry), str(dest))
+                moved.append((str(dest), False))
+                print_step("视频内容已移动", str(dest))
+            except Exception as e:
+                logger.error(f"视频内容移动失败: {e}")
+                ui_game_move_fail(entry.name, str(e))
+        return moved
+
+    @staticmethod
+    def _resolve_video_conflict(dest: Path) -> Path:
+        if not dest.exists():
+            return dest
+        stem = dest.stem if dest.is_file() else dest.name
+        suffix = dest.suffix if dest.is_file() else ""
+        parent = dest.parent
+        counter = 1
+        while True:
+            candidate = parent / f"{stem}_{counter}{suffix}"
+            if not candidate.exists():
+                return candidate
+            counter += 1
+
     def _unwrap_single_child_dir(self, dest: Path) -> Path:
         """If dest is a wrapper containing exactly one subdirectory and no files,
         promote the child up and remove the empty wrapper.
@@ -524,6 +591,13 @@ class FileManager:
                 result_info["moved_games"] = moved
                 moved_games = moved
                 logger.info(f"移动结果: {moved}")
+            else:
+                video_entries = self.detect_video_entries(result.extract_dir)
+                if video_entries:
+                    moved_videos = self.move_video_to_save_dir(video_entries)
+                    result_info["video_entries"] = [str(v) for v in video_entries]
+                    result_info["moved_videos"] = moved_videos
+                    moved_games = moved_videos
 
         return result_info, moved_games
 

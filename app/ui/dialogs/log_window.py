@@ -11,8 +11,8 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QHBoxLayout,
     QLabel,
-    QPlainTextEdit,
     QPushButton,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -63,6 +63,7 @@ class LogWindow(QDialog):
         
         self._init_ui()
         self._setup_log_listener()
+        self._load_existing_logs()
 
     def _init_ui(self) -> None:
         layout = QVBoxLayout(self)
@@ -99,7 +100,7 @@ class LogWindow(QDialog):
         
         layout.addLayout(header)
 
-        self._log_display = QPlainTextEdit()
+        self._log_display = QTextEdit()
         self._log_display.setReadOnly(True)
         self._log_display.setStyleSheet("""
             QPlainTextEdit {
@@ -186,6 +187,55 @@ class LogWindow(QDialog):
         except Exception as e:
             from PySide6.QtWidgets import QMessageBox
             QMessageBox.warning(self, "无法打开", f"无法打开日志目录:\n{e}")
+
+    def _load_existing_logs(self) -> None:
+        """Load recent log entries from the log file on disk."""
+        try:
+            from app.services.app_data_dir import get_app_data_dir
+            from app.services.logging_setup import log_file_path
+            data_dir = get_app_data_dir()
+            log_path = log_file_path(data_dir)
+            if not log_path.exists():
+                return
+            # Read last N lines from the log file
+            max_lines = 200
+            with open(log_path, "r", encoding="utf-8", errors="replace") as f:
+                lines = f.readlines()
+            tail_lines = lines[-max_lines:] if len(lines) > max_lines else lines
+            for line in tail_lines:
+                line = line.rstrip("\n\r")
+                if not line.strip():
+                    continue
+                # Parse log level from standard format:
+                # 2026-06-09 19:57:22 | INFO  | app.module | message
+                parts = line.split(" | ", 3)
+                level_name = "INFO"
+                message = line
+                if len(parts) >= 3:
+                    level_name = parts[1].strip()
+                    message = parts[2] if len(parts) == 3 else f"{parts[2]} | {parts[3]}"
+                _LEVEL_MAP = {
+                    "DEBUG": LogLevel.DEBUG,
+                    "INFO": LogLevel.INFO,
+                    "WARNING": LogLevel.WARNING,
+                    "WARN": LogLevel.WARNING,
+                    "ERROR": LogLevel.ERROR,
+                    "CRITICAL": LogLevel.ERROR,
+                }
+                level = _LEVEL_MAP.get(level_name, LogLevel.INFO)
+                entry = LogEntry(level, message)
+                self._log_buffer.append(entry)
+            # Render all loaded entries at once
+            if self._log_buffer:
+                parts_html = [entry.to_html() for entry in self._log_buffer]
+                self._log_display.setHtml("<br>".join(parts_html))
+                if self._auto_scroll:
+                    self._log_display.verticalScrollBar().setValue(
+                        self._log_display.verticalScrollBar().maximum()
+                    )
+                self._entry_count.setText(f"{len(self._log_buffer)} 条日志")
+        except Exception:
+            pass
 
     def _add_log_entry(self, entry: LogEntry) -> None:
         self._log_buffer.append(entry)

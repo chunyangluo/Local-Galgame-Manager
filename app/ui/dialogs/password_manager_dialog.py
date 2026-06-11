@@ -118,10 +118,8 @@ class PasswordManagerDialog(QDialog):
             count = item["success_count"]
             pinned = item["is_pinned"]
 
-            # 密码列 — 显示掩码
-            masked = self._mask(pwd)
-            pwd_item = QTableWidgetItem(masked)
-            pwd_item.setData(Qt.UserRole, pwd)  # 存原始值
+            pwd_item = QTableWidgetItem(pwd or "(空)")
+            pwd_item.setData(Qt.UserRole, pwd)
             self._table.setItem(row, 0, pwd_item)
 
             # 成功次数
@@ -135,14 +133,6 @@ class PasswordManagerDialog(QDialog):
             if pinned:
                 pin_item.setForeground(Qt.darkGreen)
             self._table.setItem(row, 2, pin_item)
-
-    @staticmethod
-    def _mask(pwd: str) -> str:
-        if not pwd:
-            return "(空)"
-        if len(pwd) <= 2:
-            return "*" * len(pwd)
-        return pwd[0] + "*" * (len(pwd) - 2) + pwd[-1]
 
     def _selected_password(self) -> str | None:
         rows = self._table.selectionModel().selectedRows()
@@ -174,7 +164,7 @@ class PasswordManagerDialog(QDialog):
             QMessageBox.information(self, "提示", "请先选择一行")
             return
         reply = QMessageBox.question(
-            self, "确认删除", f"确定要删除密码「{self._mask(pwd)}」吗？",
+            self, "确认删除", f"确定要删除密码「{pwd}」吗？",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
         )
         if reply != QMessageBox.Yes:

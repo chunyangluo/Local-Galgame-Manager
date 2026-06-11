@@ -37,10 +37,9 @@ from app.services.twodfan_hints import twodfan_db_stats
 
 from app.data.database import Database
 from app.services.save_archive_service import (
-    clear_directory_contents,
     directory_has_files,
+    restore_zip_to_directory,
     sha256_file,
-    unzip_safely_with_progress,
     zip_directory_with_progress,
 )
 from app.services.save_path_resolver import resolve_save_path_candidates
@@ -134,8 +133,7 @@ class _RestoreTask(QRunnable):
                     "checksum": guard_hash,
                 }
 
-            clear_directory_contents(self._dest_dir)
-            unzip_safely_with_progress(
+            restore_zip_to_directory(
                 self._backup_zip,
                 self._dest_dir,
                 progress_cb=lambda d, t, n: self.signals.progress.emit(
@@ -152,8 +150,8 @@ class _RestoreTask(QRunnable):
 class SaveManagerWindow(QDialog):
     """Non-modal-friendly dialog: set ``Qt.Window`` from caller if desired."""
 
-    def __init__(self, main: MainWindow, game_id: int) -> None:
-        super().__init__(main)
+    def __init__(self, main: MainWindow, game_id: int, parent: QWidget | None = None) -> None:
+        super().__init__(parent if parent is not None else main)
         self._main = main
         self._game_id = game_id
         self._pool = QThreadPool(self)
@@ -302,6 +300,13 @@ class SaveManagerWindow(QDialog):
 
         self.reload_all()
 
+    def closeEvent(self, event) -> None:  # type: ignore[override]
+        if self._busy:
+            QMessageBox.information(self, "任务运行中", "请等待当前备份或还原任务完成后再关闭。")
+            event.ignore()
+            return
+        super().closeEvent(event)
+
     def _db(self) -> Database:
         return self._main.db
 
@@ -398,10 +403,10 @@ class SaveManagerWindow(QDialog):
         self._twodfan_stats.setText(f"状态：已就绪 — 下载页 {np} 条，存档线索 {nh} 条。")
 
     def _open_twodfan_library_dialog(self) -> None:
+        from app.ui.dialog_presenter import exec_child_dialog
         from app.ui.dialogs.twodfan_library_dialog import TwodfanLibraryDialog
 
-        dlg = TwodfanLibraryDialog(self._main)
-        dlg.exec()
+        exec_child_dialog(self, TwodfanLibraryDialog(self._main, parent=self))
         self._twodfan_edit.setText(self._db().get_twodfan_hints_db_path())
         self._refresh_twodfan_stats()
 

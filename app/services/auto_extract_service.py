@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import sys
 import threading
 from dataclasses import dataclass, field
@@ -11,7 +12,9 @@ from typing import Any, Callable
 
 import yaml
 
-from app.services.paths import auto_extract_config_path, auto_extract_tool_dir
+from app.services.app_data_dir import get_app_data_dir
+from app.services.paths import auto_extract_config_path as bundled_auto_extract_config_path
+from app.services.paths import auto_extract_tool_dir
 
 MIN_ARCHIVE_SIZE_MB = 200
 MIN_ARCHIVE_SIZE_BYTES = MIN_ARCHIVE_SIZE_MB * 1024 * 1024
@@ -86,8 +89,89 @@ def auto_extract_missing_reason() -> str:
     return ""
 
 
+def _runtime_config_dir() -> Path:
+    return get_app_data_dir() / "auto_extract" / "config"
+
+
+def _runtime_config_path() -> Path:
+    return _runtime_config_dir() / "config.yaml"
+
+
+def _runtime_passwords_path() -> Path:
+    return _runtime_config_dir() / "passwords.json"
+
+
+def _bundled_seven_zip_path() -> Path | None:
+    root = auto_extract_tool_dir()
+    if root is None:
+        return None
+    p = root / "bin" / "7za.exe"
+    return p.resolve() if p.is_file() else None
+
+
+def _load_template_config() -> dict[str, Any]:
+    template = bundled_auto_extract_config_path()
+    if template is None or not template.is_file():
+        return {}
+    with open(template, encoding="utf-8") as f:
+        return yaml.safe_load(f) or {}
+
+
+def _default_runtime_directories() -> dict[str, str]:
+    dirs = _default_directories()
+    dirs.setdefault("logs", str(get_app_data_dir() / "auto_extract" / "logs"))
+    dirs.setdefault("upload", str(Path(dirs["watch"]) / "_upload"))
+    return dirs
+
+
+def _sanitize_runtime_config(data: dict[str, Any], *, preserve_directories: bool) -> dict[str, Any]:
+    cleaned = dict(data)
+    defaults = _default_runtime_directories()
+    current_dirs = dict(cleaned.get("directories") or {}) if preserve_directories else {}
+    cleaned["directories"] = {
+        key: str(current_dirs.get(key) or value)
+        for key, value in defaults.items()
+    }
+
+    seven_zip = dict(cleaned.get("seven_zip") or {})
+    bundled_7za = _bundled_seven_zip_path()
+    if bundled_7za is not None:
+        seven_zip["path"] = str(bundled_7za)
+    cleaned["seven_zip"] = seven_zip
+
+    passwords = dict(cleaned.get("passwords") or {})
+    passwords["file"] = str(_runtime_passwords_path())
+    passwords.setdefault("encrypt", False)
+    passwords.setdefault("encryption_key", "")
+    cleaned["passwords"] = passwords
+    return cleaned
+
+
+def _ensure_runtime_files() -> Path:
+    cfg_path = _runtime_config_path()
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+
+    if cfg_path.is_file():
+        with open(cfg_path, encoding="utf-8") as f:
+            data = yaml.safe_load(f) or {}
+        data = _sanitize_runtime_config(data, preserve_directories=True)
+    else:
+        data = _sanitize_runtime_config(_load_template_config(), preserve_directories=False)
+
+    with open(cfg_path, "w", encoding="utf-8") as f:
+        yaml.safe_dump(data, f, allow_unicode=True, sort_keys=False)
+
+    pwd_path = _runtime_passwords_path()
+    if not pwd_path.is_file():
+        with open(pwd_path, "w", encoding="utf-8") as f:
+            f.write('{\n  "passwords": [],\n  "success_map": {},\n  "success_counts": {}\n}\n')
+    return cfg_path
+
+
 def config_yaml_path() -> Path | None:
-    return auto_extract_config_path()
+    if auto_extract_tool_dir() is None:
+        return None
+    return _ensure_runtime_files()
 
 
 def _default_directories() -> dict[str, str]:
@@ -122,7 +206,7 @@ def read_directory_config() -> dict[str, str]:
         data = yaml.safe_load(f) or {}
     dirs = data.get("directories") or {}
     
-    defaults = _default_directories()
+    defaults = _default_runtime_directories()
     keys = ("watch", "target", "archive", "failed", "temp", "game_save")
     result = {}
     for k in keys:

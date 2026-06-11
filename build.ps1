@@ -21,6 +21,58 @@ function Test-Dependencies {
     return $missing
 }
 
+function Test-ReleaseIntegrationTemplates {
+    param(
+        [string]$IntegrationsPath
+    )
+
+    $autoExtractTool = Get-ChildItem -Path $IntegrationsPath -Directory |
+        Where-Object {
+            (Test-Path (Join-Path $_.FullName "config\config.yaml")) -and
+            (Test-Path (Join-Path $_.FullName "bin\7za.exe"))
+        } |
+        Select-Object -First 1
+    if ($null -eq $autoExtractTool) {
+        Write-Error "Missing auto-extract integration under: $IntegrationsPath"
+        exit 1
+    }
+
+    $autoExtractConfigDir = Join-Path $autoExtractTool.FullName "config"
+    $configPath = Join-Path $autoExtractConfigDir "config.yaml"
+    $passwordsPath = Join-Path $autoExtractConfigDir "passwords.json"
+
+    if (-not (Test-Path $configPath)) {
+        Write-Error "Missing auto-extract config template: $configPath"
+        exit 1
+    }
+    if (-not (Test-Path $passwordsPath)) {
+        Write-Error "Missing auto-extract passwords template: $passwordsPath"
+        exit 1
+    }
+
+    $configText = Get-Content $configPath -Raw -Encoding UTF8
+    if ($configText -match '[A-Za-z]:\\') {
+        Write-Error "Release config template contains local Windows paths: $configPath"
+        exit 1
+    }
+
+    try {
+        $passwordData = Get-Content $passwordsPath -Raw -Encoding UTF8 | ConvertFrom-Json
+    }
+    catch {
+        Write-Error "Invalid passwords template JSON: $passwordsPath"
+        exit 1
+    }
+
+    $passwordCount = @($passwordData.passwords).Count
+    $successMapCount = @($passwordData.success_map.PSObject.Properties).Count
+    $successCountsCount = @($passwordData.success_counts.PSObject.Properties).Count
+    if ($passwordCount -gt 0 -or $successMapCount -gt 0 -or $successCountsCount -gt 0) {
+        Write-Error "Release passwords template must be empty: $passwordsPath"
+        exit 1
+    }
+}
+
 try {
     Stop-Process -Name "LocalGalgameManager" -ErrorAction Stop
     Write-Host "Stopped running LocalGalgameManager process."
@@ -65,6 +117,7 @@ if (-not (Test-Path $integrationsPath)) {
     exit 1
 }
 Write-Host "Integrations directory found: $integrationsPath"
+Test-ReleaseIntegrationTemplates -IntegrationsPath $integrationsPath
 
 $iconPath = Join-Path $PSScriptRoot "app\assets\app_icon.ico"
 if (-not (Test-Path $iconPath)) {
@@ -72,29 +125,48 @@ if (-not (Test-Path $iconPath)) {
     exit 1
 }
 
-python -m PyInstaller --noconfirm --windowed --name LocalGalgameManager `
-    --icon "$iconPath" `
-    --add-data "${iconPath};app/assets" `
-    --add-data "${integrationsPath};integrations" `
-    --collect-all loguru `
-    --collect-all watchdog `
-    --collect-all pyzipper `
-    --collect-all lz4 `
-    --collect-all pydantic `
-    --collect-all pydantic_settings `
-    --collect-all pyyaml `
-    --collect-all fastapi `
-    --collect-all uvicorn `
-    --collect-all python_multipart `
-    --collect-all cryptography `
-    --collect-all rich `
-    --collect-all starlette `
-    --collect-all anyio `
-    --collect-all httptools `
-    --collect-all watchfiles `
-    --collect-all websockets `
-    --collect-all click `
-    app/main.py --distpath "$distPath" --workpath "$workPath"
+$helpImgPath = Join-Path $PSScriptRoot "app\assets\help-main-window.png"
+$pyInstallerArgs = @(
+    "-m", "PyInstaller",
+    "--noconfirm",
+    "--windowed",
+    "--name", "LocalGalgameManager",
+    "--icon", $iconPath,
+    "--add-data", "${iconPath};app/assets"
+)
+if (Test-Path $helpImgPath) {
+    $pyInstallerArgs += @("--add-data", "${helpImgPath};app/assets")
+}
+
+$pyInstallerArgs += @(
+    "--add-data", "${integrationsPath};integrations",
+    "--collect-all", "PySide6",
+    "--collect-all", "PIL",
+    "--collect-all", "requests",
+    "--collect-all", "loguru",
+    "--collect-all", "watchdog",
+    "--collect-all", "pyzipper",
+    "--collect-all", "lz4",
+    "--collect-all", "pydantic",
+    "--collect-all", "pydantic_settings",
+    "--collect-all", "pyyaml",
+    "--collect-all", "fastapi",
+    "--collect-all", "uvicorn",
+    "--collect-all", "python_multipart",
+    "--collect-all", "cryptography",
+    "--collect-all", "rich",
+    "--collect-all", "starlette",
+    "--collect-all", "anyio",
+    "--collect-all", "httptools",
+    "--collect-all", "watchfiles",
+    "--collect-all", "websockets",
+    "--collect-all", "click",
+    "app/main.py",
+    "--distpath", $distPath,
+    "--workpath", $workPath
+)
+
+python @pyInstallerArgs
 
 if ($LASTEXITCODE -ne 0) {
     Write-Error "PyInstaller build failed."

@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from app.core.scanner import GameScanner
+from app.services.path_utils import normalize_game_dir
 
 
 def _make_game_dir(parent: Path, name: str, exe_name: str = "Game.exe", exe_size: int = 64 * 1024) -> Path:
@@ -31,6 +32,46 @@ class TestBasicScan:
         assert len(results) == 1
         assert results[0].game_name == "MyGame"
         assert "Game.exe" in results[0].launch_exe
+        assert results[0].content_type == "game"
+
+    def test_scan_top_level_video_file(self, tmp_path: Path) -> None:
+        root = tmp_path / "gamedata"
+        root.mkdir()
+        video = root / "Opening.mp4"
+        video.write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 4096)
+        scanner = GameScanner()
+
+        results = scanner.scan_root(str(root))
+
+        assert len(results) == 1
+        assert results[0].game_name == "Opening"
+        assert results[0].content_type == "video"
+        assert results[0].launch_exe == str(video)
+
+    def test_scan_video_directory(self, tmp_path: Path) -> None:
+        root = tmp_path / "gamedata"
+        root.mkdir()
+        video_dir = root / "Bonus Movie"
+        video_dir.mkdir()
+        video = video_dir / "movie.mkv"
+        video.write_bytes(b"\x1a\x45\xdf\xa3" + b"\x00" * 4096)
+        scanner = GameScanner()
+
+        results = scanner.scan_root(str(root))
+
+        assert len(results) == 1
+        assert results[0].content_type == "video"
+        assert results[0].game_dir == normalize_game_dir(video_dir)
+        assert results[0].launch_exe == str(video)
+
+    def test_scan_video_suffix_disguised_archive_is_not_video(self, tmp_path: Path) -> None:
+        root = tmp_path / "gamedata"
+        root.mkdir()
+        disguised = root / "Movie.mp4"
+        disguised.write_bytes(b"prefix" + b"\x00" * 2048 + b"PK\x03\x04payload" + b"PK\x05\x06")
+        scanner = GameScanner()
+
+        assert scanner.scan_root(str(root)) == []
 
     def test_scan_multiple_games(self, tmp_path: Path) -> None:
         root = tmp_path / "gamedata"

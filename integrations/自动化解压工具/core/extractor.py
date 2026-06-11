@@ -399,22 +399,29 @@ class Extractor:
                 except OSError:
                     pass
 
-    def _extract_disguised_zip(
+    def _extract_disguised_archive(
         self, file_path: str, output_dir: str, password: Optional[str] = None
     ) -> tuple[bool, str]:
         try:
+            archive_type = detect_disguised_archive(file_path)
+            if archive_type is None:
+                return False, "未检测到伪装压缩包数据"
             file_size = os.path.getsize(file_path)
-            zip_start = self._find_zip_start(file_path)
-            if zip_start < 0:
-                return False, "伪装文件中未找到 ZIP 数据"
+            archive_start = self._find_disguised_archive_start(file_path, archive_type)
+            if archive_start < 0:
+                return False, f"伪装文件中未找到 {archive_type.upper()} 数据"
 
-            ui_merge_progress(f"检测到伪装 ZIP: 偏移 {format_size(zip_start)}, 大小 {format_size(file_size - zip_start)}")
+            ui_merge_progress(
+                f"检测到伪装 {archive_type.upper()}: "
+                f"偏移 {format_size(archive_start)}, 大小 {format_size(file_size - archive_start)}"
+            )
 
-            zip_part = Path(output_dir) / "_disguised_temp.zip"
+            suffix = { "zip": ".zip", "rar": ".rar", "7z": ".7z" }.get(archive_type, ".bin")
+            archive_part = Path(output_dir) / f"_disguised_temp{suffix}"
             try:
-                with open(file_path, 'rb') as fin, open(zip_part, 'wb') as fout:
-                    fin.seek(zip_start)
-                    remaining = file_size - zip_start
+                with open(file_path, 'rb') as fin, open(archive_part, 'wb') as fout:
+                    fin.seek(archive_start)
+                    remaining = file_size - archive_start
                     while remaining > 0:
                         chunk = min(remaining, 64 * 1024 * 1024)
                         data = fin.read(chunk)
@@ -423,18 +430,26 @@ class Extractor:
                         fout.write(data)
                         remaining -= len(data)
 
-                return self._run_extract(str(zip_part), output_dir, password)
+                return self._run_extract(str(archive_part), output_dir, password)
             finally:
-                if zip_part.exists():
+                if archive_part.exists():
                     try:
-                        zip_part.unlink()
+                        archive_part.unlink()
                     except OSError:
                         pass
         except Exception as e:
             return False, str(e)
 
     @staticmethod
-    def _find_zip_start(file_path: str) -> int:
+    def _find_disguised_archive_start(file_path: str, archive_type: str) -> int:
+        signatures = {
+            "zip": b"PK\x03\x04",
+            "rar": b"Rar!\x1a\x07",
+            "7z": b"7z\xbc\xaf\x27\x1c",
+        }
+        signature = signatures.get(archive_type)
+        if signature is None:
+            return -1
         chunk_size = 100 * 1024 * 1024
         with open(file_path, 'rb') as f:
             offset = 0
@@ -442,11 +457,15 @@ class Extractor:
                 data = f.read(chunk_size)
                 if not data:
                     break
-                idx = data.find(b'PK\x03\x04')
+                idx = data.find(signature)
                 if idx >= 0:
                     return offset + idx
                 offset += len(data)
         return -1
+
+    @staticmethod
+    def _find_zip_start(file_path: str) -> int:
+        return Extractor._find_disguised_archive_start(file_path, "zip")
 
     def _build_extract_cmd(
         self, archive_path: str, output_dir: str, password: Optional[str] = None
@@ -640,8 +659,8 @@ class Extractor:
 
         is_disguised = not is_split and detect_disguised_archive(file_path) is not None
         if is_disguised:
-            extract_fn = self._extract_disguised_zip
-            engine = "Python(伪装ZIP)"
+            extract_fn = self._extract_disguised_archive
+            engine = "Python(伪装压缩包)"
 
         ui_extract_start(file_name, engine)
 

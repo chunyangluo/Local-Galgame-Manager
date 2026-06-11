@@ -33,6 +33,7 @@ class GameRecord:
     custom_save_root: str | None = None
     window_title: str | None = None
     hidden: bool = False
+    content_type: str = "game"
 
 
 @dataclass
@@ -91,6 +92,7 @@ class VndbImportRow:
     screenshots_json: str | None
     cover_path: str | None
     source: str = "vndb"
+    content_type: str = "game"
 
 
 class Database:
@@ -148,6 +150,7 @@ class Database:
                 custom_launch_exe TEXT,
                 custom_cover_path TEXT,
                 cover_path TEXT,
+                content_type TEXT DEFAULT 'game',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 UNIQUE(root_dir)
@@ -254,6 +257,8 @@ class Database:
             self.conn.execute("ALTER TABLE games ADD COLUMN window_title TEXT")
         if "le_profile" not in cols:
             self.conn.execute("ALTER TABLE games ADD COLUMN le_profile TEXT DEFAULT ''")
+        if "content_type" not in cols:
+            self.conn.execute("ALTER TABLE games ADD COLUMN content_type TEXT DEFAULT 'game'")
 
     def _ensure_save_backup_schema(self) -> None:
         self.conn.executescript(
@@ -639,22 +644,32 @@ class Database:
         rows = self.conn.execute("SELECT path FROM scan_roots ORDER BY created_at DESC").fetchall()
         return [str(r["path"]) for r in rows]
 
-    def upsert_game(self, name: str, root_dir: str, launch_exe: str, cover_path: str | None = None) -> None:
+    def upsert_game(
+        self,
+        name: str,
+        root_dir: str,
+        launch_exe: str,
+        cover_path: str | None = None,
+        *,
+        content_type: str = "game",
+    ) -> None:
         from app.services.path_utils import normalize_game_dir
 
         root_dir = normalize_game_dir(root_dir)
+        normalized_type = content_type if content_type in {"game", "video"} else "game"
         now = datetime.utcnow().isoformat()
         self.conn.execute(
             """
-            INSERT INTO games (name, root_dir, launch_exe, cover_path, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO games (name, root_dir, launch_exe, cover_path, content_type, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(root_dir) DO UPDATE SET
                 name = COALESCE(NULLIF(games.custom_name, ''), excluded.name),
                 launch_exe = COALESCE(NULLIF(games.custom_launch_exe, ''), excluded.launch_exe),
                 cover_path = COALESCE(NULLIF(games.custom_cover_path, ''), COALESCE(excluded.cover_path, games.cover_path)),
+                content_type = excluded.content_type,
                 updated_at = excluded.updated_at
             """,
-            (name, root_dir, launch_exe, cover_path, now, now),
+            (name, root_dir, launch_exe, cover_path, normalized_type, now, now),
         )
         self.conn.commit()
 
@@ -684,6 +699,7 @@ class Database:
                 row.image_url,
                 row.screenshots_json,
                 row.source or "vndb",
+                row.content_type if row.content_type in {"game", "video"} else "game",
                 now,
                 now,
             )
@@ -696,13 +712,14 @@ class Database:
                     name, root_dir, launch_exe, cover_path,
                     vndb_id, title_original, title_localized, description,
                     rating, platforms, languages, image_url, screenshots_json,
-                    source, created_at, updated_at
+                    source, content_type, created_at, updated_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(root_dir) DO UPDATE SET
                     name = COALESCE(NULLIF(games.custom_name, ''), excluded.name),
                     launch_exe = COALESCE(NULLIF(games.custom_launch_exe, ''), excluded.launch_exe),
                     cover_path = COALESCE(NULLIF(games.custom_cover_path, ''), COALESCE(excluded.cover_path, games.cover_path)),
+                    content_type = excluded.content_type,
                     vndb_id = COALESCE(excluded.vndb_id, games.vndb_id),
                     title_original = COALESCE(excluded.title_original, games.title_original),
                     title_localized = COALESCE(excluded.title_localized, games.title_localized),
@@ -748,7 +765,8 @@ class Database:
                 g.screenshots_json,
                 g.source,
                 NULLIF(TRIM(g.custom_save_root), '') AS custom_save_root,
-                g.window_title
+                g.window_title,
+                COALESCE(NULLIF(g.content_type, ''), 'game') AS content_type
             FROM games g
             WHERE g.root_dir = ?
             """,
@@ -780,6 +798,7 @@ class Database:
             source=row["source"],
             custom_save_root=row["custom_save_root"],
             window_title=row["window_title"],
+            content_type=str(row["content_type"] or "game"),
         )
 
     def update_game_identity(self, game_id: int, name: str, launch_exe: str) -> None:
@@ -863,6 +882,7 @@ class Database:
                 g.source,
                 NULLIF(TRIM(g.custom_save_root), '') AS custom_save_root,
                 g.window_title,
+                COALESCE(NULLIF(g.content_type, ''), 'game') AS content_type,
                 CASE WHEN f.game_id IS NULL THEN 0 ELSE 1 END AS favorite,
                 CASE WHEN h.game_id IS NULL THEN 0 ELSE 1 END AS hidden,
                 COALESCE(GROUP_CONCAT(c.name, ','), '') AS categories,
@@ -905,6 +925,7 @@ class Database:
                 source=r["source"],
                 custom_save_root=r["custom_save_root"],
                 window_title=r["window_title"],
+                content_type=str(r["content_type"] or "game"),
             )
             for r in rows
         ]
@@ -928,7 +949,7 @@ class Database:
         from pathlib import Path
 
         games = self.list_games(user_id)
-        return [g for g in games if not Path(g.root_dir).is_dir()]
+        return [g for g in games if not Path(g.root_dir).exists()]
 
     def remove_games_by_ids(self, game_ids: list[int], *, keep_custom: bool = True) -> int:
         """Remove multiple games by ID. Returns count of removed games.

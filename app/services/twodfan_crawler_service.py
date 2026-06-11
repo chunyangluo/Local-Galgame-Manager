@@ -39,7 +39,8 @@ class TwodfanCrawlerService(QObject):
         self._resume = resume
         self._skip_existing = skip_existing
         self._cancel = False
-        self._db_path = str(default_twodfan_sqlite_path())
+        db_path = default_twodfan_sqlite_path()
+        self._db_path = str(db_path) if db_path is not None else None
 
     def request_cancel(self) -> None:
         self._cancel = True
@@ -51,6 +52,9 @@ class TwodfanCrawlerService(QObject):
     def run(self) -> None:
         """Execute the crawl. Call from a QThread."""
         self._log("开始爬取...")
+        if self._db_path is None:
+            self.finished.emit(False, "2DFan 线索库路径不可用，无法启动爬取。")
+            return
         if self._use_playwright:
             self._run_with_playwright()
         else:

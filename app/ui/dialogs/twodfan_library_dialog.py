@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QVBoxLayout,
+    QWidget,
 )
 
 from app.services.paths import (
@@ -40,8 +41,8 @@ def _open_local_file(path: Path) -> bool:
 class TwodfanLibraryDialog(QDialog):
     """Configure the optional 2DFan hints database and jump to the bundled crawler tool."""
 
-    def __init__(self, main: MainWindow) -> None:
-        super().__init__(main)
+    def __init__(self, main: MainWindow, parent: QWidget | None = None) -> None:
+        super().__init__(parent if parent is not None else main)
         self._main = main
         self.setWindowTitle("2DFan 线索库与爬虫")
         self.setMinimumWidth(520)

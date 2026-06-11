@@ -123,7 +123,7 @@ class ScanMixin:
     def _on_scan_finished(
         self,
         roots: list[str],
-        rows: list[tuple[str, str, str]],
+        rows: list[tuple],
         imported: int,
         error: str,
     ) -> None:
@@ -147,7 +147,11 @@ class ScanMixin:
         if rows and not self._skip_scan_message:
             msg = f"扫描完成！\n\n"
             msg += f"扫描目录数: {len(roots)}\n"
-            msg += f"识别到游戏: {len(rows)} 个"
+            game_count = sum(1 for row in rows if self._scan_row_content_type(row) == "game")
+            video_count = sum(1 for row in rows if self._scan_row_content_type(row) == "video")
+            msg += f"识别到游戏: {game_count} 个"
+            if video_count:
+                msg += f"\n识别到视频: {video_count} 个"
             QMessageBox.information(self, "扫描完成", msg)
         
         if not rows:
@@ -183,11 +187,26 @@ class ScanMixin:
             self.refresh_games()
             self.status.setText("增量扫描完成，没有发现新游戏（已保留原有库数据）")
             return
-        valid_dirs = {row[1] for row in rows}
+        video_rows = [row for row in rows if self._scan_row_content_type(row) == "video"]
+        game_rows = [row for row in rows if self._scan_row_content_type(row) == "game"]
+        for name, root_dir, launch_path, *_ in video_rows:
+            self.db.upsert_game(name, root_dir, launch_path, content_type="video")
+
+        if not game_rows:
+            self._scan_running = False
+            self._skip_scan_message = False
+            self._end_scan_ui()
+            self.refresh_games()
+            self.status.setText(f"扫描完成，已导入 {len(video_rows)} 个视频条目")
+            return
+
+        vndb_targets = [(row[0], row[1], row[2]) for row in game_rows]
+        valid_dirs = {row[1] for row in game_rows}
         self._skip_scan_message = False
-        self.status.setText(f"扫描完成，开始 VNDB 导入（共 {len(rows)} 项）...")
+        suffix = f"，另导入 {len(video_rows)} 个视频" if video_rows else ""
+        self.status.setText(f"扫描完成，开始 VNDB 导入（共 {len(game_rows)} 项{suffix}）...")
         self._start_vndb_batch_import(
-            targets=rows,
+            targets=vndb_targets,
             roots=roots,
             valid_dirs=valid_dirs,
         )
@@ -195,6 +214,12 @@ class ScanMixin:
     def _clear_scan_worker(self) -> None:
         self._scan_worker = None
         self._scan_thread = None
+
+    @staticmethod
+    def _scan_row_content_type(row: tuple) -> str:
+        if len(row) >= 4 and str(row[3]).strip().lower() == "video":
+            return "video"
+        return "game"
 
     def _prompt_clean_dead_links(self, dead_games: list) -> None:
         """Prompt user to clean up dead links (games whose folders were deleted)."""
@@ -254,6 +279,8 @@ class ScanMixin:
     def _start_scan_ui(self) -> None:
         self.btn_scan.setEnabled(False)
         self.btn_vndb_import.setEnabled(False)
+        if hasattr(self, "btn_quick_workflow"):
+            self.btn_quick_workflow.setEnabled(False)
         self.btn_add_root.setEnabled(False)
         self.act_manage_roots.setEnabled(False)
         self.btn_refresh.setEnabled(False)
@@ -266,6 +293,8 @@ class ScanMixin:
     def _end_scan_ui(self) -> None:
         self.btn_scan.setEnabled(True)
         self.btn_vndb_import.setEnabled(True)
+        if hasattr(self, "btn_quick_workflow"):
+            self.btn_quick_workflow.setEnabled(True)
         self.btn_add_root.setEnabled(True)
         self.act_manage_roots.setEnabled(True)
         self.btn_refresh.setEnabled(True)

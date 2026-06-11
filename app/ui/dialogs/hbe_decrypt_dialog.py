@@ -40,8 +40,8 @@ if TYPE_CHECKING:
 
 
 class HbeDecryptDialog(QDialog):
-    def __init__(self, main: MainWindow) -> None:
-        super().__init__(main)
+    def __init__(self, main: MainWindow, parent: QWidget | None = None) -> None:
+        super().__init__(parent if parent is not None else main)
         self._main = main
         self.setWindowTitle("HBE 解密工具")
         self.setMinimumSize(640, 520)
@@ -191,6 +191,12 @@ class HbeDecryptDialog(QDialog):
         self._running = busy
         self._btn_single.setEnabled(not busy)
         self._btn_batch.setEnabled(not busy)
+
+    def reject(self) -> None:
+        if self._running:
+            QMessageBox.information(self, "任务运行中", "请等待当前解密任务完成后再关闭。")
+            return
+        super().reject()
 
     def _browse_single_cipher(self) -> None:
         path, _ = QFileDialog.getOpenFileName(

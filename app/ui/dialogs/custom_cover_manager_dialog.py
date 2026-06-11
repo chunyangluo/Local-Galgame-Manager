@@ -25,12 +25,21 @@ from PySide6.QtWidgets import (
 class CustomCoverManagerDialog(QDialog):
     """自定义封面管理对话框"""
     
-    def __init__(self, parent, game_id: int, game_name: str, root_dir: str, current_cover_path: str | None):
-        super().__init__(parent)
+    def __init__(
+        self,
+        main,
+        game_id: int,
+        game_name: str,
+        root_dir: str,
+        current_cover_path: str | None,
+        *,
+        parent: QWidget | None = None,
+    ):
+        super().__init__(parent if parent is not None else main)
         self.setWindowTitle("自定义封面管理")
         self.setMinimumWidth(600)
         
-        self._parent = parent
+        self._main = main
         self._game_id = game_id
         self._game_name = game_name
         self._root_dir = root_dir
@@ -237,15 +246,15 @@ class CustomCoverManagerDialog(QDialog):
         try:
             if self._selected_cover is None:
                 # 重置封面
-                self._parent.db.update_game_custom_cover(self._game_id, None)
-                self._parent.status.setText("封面已恢复为默认")
+                self._main.db.update_game_custom_cover(self._game_id, None)
+                self._main.status.setText("封面已恢复为默认")
             else:
                 # 设置自定义封面
-                cover = self._parent.cover_manager.import_custom_cover(self._game_id, self._selected_cover)
-                self._parent.db.update_game_custom_cover(self._game_id, cover)
-                self._parent.status.setText("封面已更新")
+                cover = self._main.cover_manager.import_custom_cover(self._game_id, self._selected_cover)
+                self._main.db.update_game_custom_cover(self._game_id, cover)
+                self._main.status.setText("封面已更新")
             
-            self._parent.refresh_games()
+            self._main.refresh_games()
             self.accept()
         except Exception as exc:
             QMessageBox.critical(self, "操作失败", str(exc))

@@ -115,8 +115,8 @@ def _fmt_datetime(dt_str: str) -> str:
 
 
 class GameDetailDialog(QDialog):
-    def __init__(self, main: MainWindow, game_id: int) -> None:
-        super().__init__(main)
+    def __init__(self, main: MainWindow, game_id: int, parent: QWidget | None = None) -> None:
+        super().__init__(parent if parent is not None else main)
         self._main = main
         self._game_id = game_id
         self.setWindowTitle("游戏详情")
@@ -424,7 +424,8 @@ class GameDetailDialog(QDialog):
         self._fill_history(records)
 
     def _apply_game(self, game: GameRecord) -> None:
-        self.setWindowTitle(f"游戏详情 — {game.name}")
+        is_video = getattr(game, "content_type", "game") == "video"
+        self.setWindowTitle(f"{'视频' if is_video else '游戏'}详情 — {game.name}")
         self._title.setText(game.name)
 
         self._title_original.setText(f'<span class="meta-label">原名:</span> <span class="meta-value">{game.title_original or "<span class=\'missing\'>未获取</span>"}</span>')
@@ -446,16 +447,20 @@ class GameDetailDialog(QDialog):
         else:
             source_text = '<span class="missing">📦 数据来源: 未获取</span>'
         
-        vndb_text = f"VNDB ID: {game.vndb_id or '未获取'}"
+        vndb_text = "视频内容" if is_video else f"VNDB ID: {game.vndb_id or '未获取'}"
         cat_text = f"分类: {game.categories or '未设置'}"
         self._meta_source.setText(f"{vndb_text} ｜ {source_text} ｜ {cat_text}")
 
         last_played = _fmt_datetime(game.last_played_at) if game.last_played_at else "无"
         duration_text = _fmt_duration(game.total_play_seconds)
-        self._play_summary.setText(
-            f"最近游玩: {last_played} ｜ 次数: {game.play_count} ｜ 累计: {duration_text}"
-        )
-        self._play_summary.setToolTip(f"累计游玩 {game.total_play_seconds} 秒")
+        if is_video:
+            self._play_summary.setText(f"最近打开: {last_played} ｜ 次数: {game.play_count}")
+            self._play_summary.setToolTip("视频打开记录")
+        else:
+            self._play_summary.setText(
+                f"最近游玩: {last_played} ｜ 次数: {game.play_count} ｜ 累计: {duration_text}"
+            )
+            self._play_summary.setToolTip(f"累计游玩 {game.total_play_seconds} 秒")
 
         desc = game.description or ""
         if desc:
@@ -463,8 +468,11 @@ class GameDetailDialog(QDialog):
             self._refresh_meta_hint.setText("")
         else:
             self._description.setPlainText("")
-            self._refresh_meta_hint.setText('<a href="refresh">点击「刷新元数据」获取游戏简介</a>')
-            self._refresh_meta_hint.linkActivated.connect(lambda: self._on_refresh_meta())
+            if is_video:
+                self._refresh_meta_hint.setText("视频条目不参与 VNDB 元数据导入。")
+            else:
+                self._refresh_meta_hint.setText('<a href="refresh">点击「刷新元数据」获取游戏简介</a>')
+                self._refresh_meta_hint.linkActivated.connect(lambda: self._on_refresh_meta())
 
         pix = QPixmap()
         if game.cover_path:
@@ -482,6 +490,16 @@ class GameDetailDialog(QDialog):
                 Qt.SmoothTransformation,
             )
             self._cover.setPixmap(scaled)
+
+        self._btn_run.setText("▶️ 播放视频" if is_video else "▶️ 启动游戏")
+        self._btn_run.setToolTip("用系统默认播放器打开视频" if is_video else "普通方式启动（退出后写入游玩记录）")
+        self._btn_run_le.setVisible(not is_video)
+        self._btn_debug.setVisible(not is_video)
+        self._btn_save_mgr.setVisible(not is_video)
+        self._btn_select_title.setVisible(not is_video)
+        self._btn_meta.setVisible(not is_video)
+        self._btn_root.setText("📂 打开所在目录" if is_video else "📂 打开游戏目录")
+        self._btn_launch.setText("🔍 定位视频文件" if is_video else "🔍 打开启动文件")
 
     def _fill_history(self, records: list[PlayRecordEntry]) -> None:
         self._history_table.setRowCount(0)
@@ -531,7 +549,11 @@ class GameDetailDialog(QDialog):
         if not self._game:
             return
         try:
-            reveal_in_explorer(self._game.root_dir, select_file=False)
+            root = Path(self._game.root_dir)
+            if getattr(self._game, "content_type", "game") == "video" and root.is_file():
+                reveal_in_explorer(str(root), select_file=True)
+            else:
+                reveal_in_explorer(self._game.root_dir, select_file=False)
         except FileNotFoundError as exc:
             QMessageBox.warning(self, "无法打开", str(exc))
 
@@ -561,6 +583,9 @@ class GameDetailDialog(QDialog):
             QMessageBox.warning(self, "无法打开", str(exc))
 
     def _on_refresh_meta(self) -> None:
+        if self._game and getattr(self._game, "content_type", "game") == "video":
+            QMessageBox.information(self, "无需刷新", "视频条目不参与 VNDB 元数据导入。")
+            return
         if self._is_loading:
             return
         self._is_loading = True
@@ -586,20 +611,23 @@ class GameDetailDialog(QDialog):
         self.reload_from_db()
 
     def _on_edit_identity(self) -> None:
-        self._main.edit_game_identity_for_game_id(self._game_id)
+        self._main.edit_game_identity_for_game_id(self._game_id, parent=self)
         self.reload_from_db()
 
     def _on_set_custom_cover(self) -> None:
         from app.ui.dialogs.custom_cover_manager_dialog import CustomCoverManagerDialog
         
+        from app.ui.dialog_presenter import exec_child_dialog
+
         dialog = CustomCoverManagerDialog(
             self._main,
             self._game_id,
             self._game.name,
             self._game.root_dir,
-            self._game.cover_path
+            self._game.cover_path,
+            parent=self,
         )
-        if dialog.exec():
+        if exec_child_dialog(self, dialog):
             self.reload_from_db()
 
     def _on_select_title(self) -> None:
@@ -651,7 +679,7 @@ class GameDetailDialog(QDialog):
             self._main.refresh_games()
 
     def _on_open_save_manager(self) -> None:
-        self._main.open_save_manager(self._game_id)
+        self._main.open_save_manager(self._game_id, parent=self)
 
     def _on_cover_drag_enter(self, event: QDragEnterEvent) -> None:
         if event.mimeData().hasUrls():
@@ -678,12 +706,15 @@ class GameDetailDialog(QDialog):
             return
         
         from app.ui.dialogs.custom_cover_manager_dialog import CustomCoverManagerDialog
+        from app.ui.dialog_presenter import exec_child_dialog
+
         dialog = CustomCoverManagerDialog(
             self._main,
             self._game_id,
             self._game.name,
             self._game.root_dir,
-            str(file_path)
+            str(file_path),
+            parent=self,
         )
-        if dialog.exec():
+        if exec_child_dialog(self, dialog):
             self.reload_from_db()

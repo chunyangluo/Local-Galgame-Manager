@@ -30,10 +30,13 @@ class CoverRefetchTask(QRunnable):
 
     def run(self) -> None:  # type: ignore[override]
         cache_key = self._vndb_id or f"game_{self._game_id}"
-        cached = self._cover_manager.cache_cover_with_fallback(
-            image_url=self._image_url,
-            cache_key=cache_key,
-            game_name=self._game_name,
-        )
-        ok = bool(cached and Path(cached).exists())
-        self.signals.finished.emit(self._game_id, cached or "", ok)
+        try:
+            cached = self._cover_manager.cache_cover_with_fallback(
+                image_url=self._image_url,
+                cache_key=cache_key,
+                game_name=self._game_name,
+            )
+            ok = bool(cached and Path(cached).exists())
+            self.signals.finished.emit(self._game_id, cached or "", ok)
+        except Exception:
+            self.signals.finished.emit(self._game_id, "", False)

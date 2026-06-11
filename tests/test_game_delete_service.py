@@ -21,13 +21,17 @@ def test_skip_delete_confirm_preference(db: Database) -> None:
     assert get_skip_delete_game_confirm(db) is False
 
 
-def test_delete_fails_before_db_row_removed(
+def test_install_delete_failure_happens_after_db_row_removed(
     db_with_user: tuple[Database, int], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from app.services import game_delete_service as gds
 
     db, uid = db_with_user
-    db.upsert_game("Stay", "/games/stay", "/games/stay/g.exe")
+    install = Path(db.base_dir) / "games" / "stay"
+    install.mkdir(parents=True)
+    exe = install / "g.exe"
+    exe.write_bytes(b"")
+    db.upsert_game("Stay", str(install), str(exe))
     gid = db.list_games(uid)[0].id
 
     def boom(*_a, **_k):
@@ -36,6 +40,24 @@ def test_delete_fails_before_db_row_removed(
     monkeypatch.setattr(gds, "delete_game_install_folder", boom)
     with pytest.raises(OSError):
         delete_game_from_library(db, gid, delete_install_folder=True)
+    assert db.list_games(uid) == []
+
+
+def test_db_delete_failure_keeps_install_folder(
+    db_with_user: tuple[Database, int], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    db, uid = db_with_user
+    install = tmp_path / "games" / "stay"
+    install.mkdir(parents=True)
+    exe = install / "g.exe"
+    exe.write_bytes(b"")
+    db.upsert_game("Stay", str(install), str(exe))
+    gid = db.list_games(uid)[0].id
+
+    monkeypatch.setattr(db, "delete_game", lambda _gid: False)
+    with pytest.raises(ValueError, match="删除失败"):
+        delete_game_from_library(db, gid, delete_install_folder=True)
+    assert install.exists()
     assert len(db.list_games(uid)) == 1
 
 

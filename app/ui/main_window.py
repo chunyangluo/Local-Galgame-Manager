@@ -128,6 +128,7 @@ class MainWindow(
         self._setup_tray()
         self.refresh_games()
         QTimer.singleShot(1500, self._startup_auto_fix_covers)
+        QTimer.singleShot(900, self._maybe_show_welcome)
         if self.db.list_scan_roots():
             self.status.setText('已加载扫描目录，点击"全量扫描"开始更新游戏库')
 
@@ -287,44 +288,56 @@ class MainWindow(
         self._style_more_menu(menu)
         icon = self._more_menu_icon
 
-        # ── 高频：目录 / 数据管理 ──
-        self.act_manage_roots = self._add_more_action(
-            menu,
-            "管理目录…",
-            self._manage_scan_roots,
-            icon=icon(QStyle.StandardPixmap.SP_DirIcon),
-            tooltip="查看、删除或清空已添加的扫描目录",
-        )
-
-        # 数据管理子菜单（合并：数据管理 + 新建用户 + 导出/恢复备份）
+        # ── 第一组：全链路数据管理入口 ──
         data_menu = menu.addMenu(
             icon(QStyle.StandardPixmap.SP_FileDialogDetailedView),
             "📁 数据管理",
         )
         self._style_more_menu(data_menu)
+
+        self.act_manage_roots = QAction(
+            icon(QStyle.StandardPixmap.SP_DirIcon),
+            "扫描目录管理…",
+            self,
+        )
+        self.act_manage_roots.triggered.connect(self._manage_scan_roots)
+        self.act_manage_roots.setToolTip("查看、删除或清空已添加的扫描目录")
+        data_menu.addAction(self.act_manage_roots)
+
         data_menu.addAction(
             icon(QStyle.StandardPixmap.SP_FileDialogDetailedView),
-            "游戏列表管理…",
+            "游戏数据管理…",
             self._open_game_data_manager,
         )
-        data_menu.addAction(
+
+        data_menu.addSeparator()
+
+        # 用户管理子菜单（预留扩展：切换用户、删除用户）
+        user_menu = data_menu.addMenu("👤 用户管理")
+        self._style_more_menu(user_menu)
+        user_menu.addAction(
             icon(QStyle.StandardPixmap.SP_ComputerIcon),
             "新建用户",
             self._add_user,
         )
+
         data_menu.addSeparator()
-        data_menu.addAction(
+
+        # 备份管理子菜单（预留扩展：增量备份、自动备份计划）
+        backup_menu = data_menu.addMenu("💾 备份管理")
+        self._style_more_menu(backup_menu)
+        backup_menu.addAction(
             icon(QStyle.StandardPixmap.SP_DialogSaveButton),
             "导出备份",
             self._backup,
         )
-        data_menu.addAction(
+        backup_menu.addAction(
             icon(QStyle.StandardPixmap.SP_DialogOpenButton),
             "恢复备份",
             self._restore,
         )
 
-        # ── 开关项（统一图标 + 状态样式）──
+        # ── 第二组：高频全局开关 ──
         menu.addSeparator()
 
         self.act_startup = QAction("▶️ 开机启动: OFF", self)
@@ -349,19 +362,20 @@ class MainWindow(
         self._apply_auto_backup_launch_ui()
         self._apply_show_hidden_games_ui()
 
+        # ── 第三组：游戏信息查询 ──
         menu.addSeparator()
 
         self._add_more_action(
             menu,
-            "游玩历史…",
+            "📜 游玩历史…",
             self.open_play_history,
             icon=icon(QStyle.StandardPixmap.SP_FileDialogListView),
             tooltip="独立窗口：全部游玩记录、筛选、清空",
         )
 
+        # ── 第四组：工具执行入口 ──
         menu.addSeparator()
 
-        # ── 工具箱（低频 / 专业工具）──
         toolbox = menu.addMenu(
             icon(QStyle.StandardPixmap.SP_FileDialogInfoView),
             "🔧 工具箱",
@@ -385,37 +399,47 @@ class MainWindow(
             self._open_fdm_dialog,
             tooltip="打开 Free Download Manager 或粘贴链接新建下载任务",
         )
-
-        extended = toolbox.addMenu("扩展工具")
-        self._style_more_menu(extended)
         self._add_more_action(
-            extended,
+            toolbox,
+            "LE 快速启动…",
+            self._open_locale_emulator_settings,
+            tooltip="配置 LEProc.exe，用于「LE 转区启动」",
+        )
+
+        twodfan_menu = toolbox.addMenu("2DFan 工具")
+        self._style_more_menu(twodfan_menu)
+        self._add_more_action(
+            twodfan_menu,
+            "2DFan 线索库…",
+            self._open_twodfan_library_dialog,
+            tooltip="配置存档路径线索库",
+        )
+        self._add_more_action(
+            twodfan_menu,
+            "2DFan 一键爬取…",
+            self._start_twodfan_crawl,
+            tooltip="从 2dfan.com 爬取存档位置线索",
+        )
+
+        self._add_more_action(
+            toolbox,
             "插件管理…",
             self._open_plugin_settings,
             icon=icon(QStyle.StandardPixmap.SP_DialogApplyButton),
             tooltip="扫描 / 启动链路上的插件钩子",
         )
 
+        # ── 第五组：帮助与设置 ──
+        menu.addSeparator()
+
         self._add_more_action(
-            toolbox,
-            "Locale 模拟器 (LE)…",
-            self._open_locale_emulator_settings,
-            tooltip="配置 LEProc.exe，用于「LE 转区启动」",
-        )
-        self._add_more_action(
-            toolbox,
-            "2DFan 线索库…",
-            self._open_twodfan_library_dialog,
-            tooltip="配置存档路径线索库",
-        )
-        self._add_more_action(
-            toolbox,
-            "2DFan 一键爬取…",
-            self._start_twodfan_crawl,
-            tooltip="从 2dfan.com 爬取存档位置线索",
+            menu,
+            "📖 使用帮助…",
+            self._show_help,
+            icon=icon(QStyle.StandardPixmap.SP_DialogHelpButton),
+            tooltip="快速入门、交互演示、功能手册与常用外链",
         )
 
-        # ── 设置区 ──
         self._add_more_action(
             menu,
             "⚙ 设置…",
@@ -605,9 +629,9 @@ class MainWindow(
         toolbar.addWidget(self.btn_more)
         self._polish_toolbar_control(self.btn_more)
 
-        self.btn_help = QPushButton("Help")
+        self.btn_help = QPushButton("帮助")
         self.btn_help.clicked.connect(self._show_help)
-        self.btn_help.setToolTip("使用帮助")
+        self.btn_help.setToolTip("使用帮助与交互演示")
         toolbar.addWidget(self.btn_help)
 
         root.addWidget(toolbar_widget)
@@ -682,7 +706,7 @@ class MainWindow(
 
     def _create_tray_menu(self):
         menu = QMenu()
-        open_action = QAction("打开主界面", self)
+        open_action = QAction("打开主窗口", self)
         open_action.triggered.connect(self.showNormal)
         menu.addAction(open_action)
         quit_action = QAction("退出程序", self)
@@ -700,6 +724,61 @@ class MainWindow(
     def _quit_from_tray(self) -> None:
         self._allow_close = True
         self.close()
+
+    def _saved_close_action(self) -> str:
+        return str(self.db.get_ui_preferences().get("close_window_action", "")).strip()
+
+    def _save_close_action(self, action: str) -> None:
+        prefs = dict(self.db.get_ui_preferences())
+        prefs["close_window_action"] = action
+        self.db.set_ui_preferences(prefs)
+
+    def _minimize_to_tray(self) -> None:
+        if self.isVisible():
+            self.hide()
+            if self.tray_icon is not None:
+                self.tray_icon.showMessage(
+                    APP_DISPLAY_NAME,
+                    "已最小化到系统托盘；右键托盘图标可打开主窗口或退出程序",
+                )
+
+    def _confirm_close_action(self) -> str | None:
+        from app.ui.dialogs.close_confirm_dialog import CloseWindowConfirmDialog
+
+        saved = self._saved_close_action()
+        if saved in (CloseWindowConfirmDialog.ACTION_TRAY, CloseWindowConfirmDialog.ACTION_QUIT):
+            return saved
+
+        dlg = CloseWindowConfirmDialog(self)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return None
+        action = dlg.selected_action()
+        if dlg.remember_choice():
+            self._save_close_action(action)
+        return action
+
+    def _has_background_tasks(self) -> bool:
+        return (
+            getattr(self, "_scan_running", False)
+            or getattr(self, "_vndb_worker", None) is not None
+            or bool(getattr(self, "_launching_game_ids", set()))
+            or bool(getattr(self, "_cover_retry_pending", set()))
+        )
+
+    def _cancel_background_tasks_for_exit(self) -> None:
+        if getattr(self, "_scan_worker", None) is not None:
+            self._scan_worker.request_cancel()
+        if getattr(self, "_vndb_worker", None) is not None:
+            self._vndb_worker.request_cancel()
+        self._cover_retry_pool.clear()
+        self._cover_retry_pending.clear()
+        self._cover_retry_startup_running = False
+        self._scan_running = False
+        if getattr(self, "_scan_thread", None) is not None:
+            self._scan_thread.quit()
+            self._scan_thread.wait(2000)
+        self._cover_retry_pool.waitForDone(2000)
+        self._launch_pool.waitForDone(2000)
 
     def _quit_application(self) -> None:
         app = QApplication.instance()
@@ -753,13 +832,18 @@ class MainWindow(
         log_window.raise_()
         log_window.activateWindow()
 
-    def open_game_detail(self, game_id: int) -> None:
-        GameDetailDialog(self, game_id).exec()
+    def open_game_detail(self, game_id: int, parent: QWidget | None = None) -> None:
+        from app.ui.dialog_presenter import exec_child_dialog
 
-    def open_save_manager(self, game_id: int) -> None:
+        owner = parent if parent is not None else self
+        exec_child_dialog(owner, GameDetailDialog(self, game_id, parent=owner))
+
+    def open_save_manager(self, game_id: int, parent: QWidget | None = None) -> None:
+        from app.ui.dialog_presenter import present_auxiliary_dialog
         from app.ui.dialogs.save_manager_window import SaveManagerWindow
 
-        SaveManagerWindow(self, game_id).show()
+        owner = parent if parent is not None else self
+        present_auxiliary_dialog(owner, SaveManagerWindow(self, game_id, parent=owner))
 
     def _open_selected_game_detail(self) -> None:
         game = self._selected_game()
@@ -839,14 +923,28 @@ class MainWindow(
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if not self._allow_close and self.tray_icon is not None:
-            if self.isVisible():
-                self.hide()
-                self.tray_icon.showMessage(
-                    APP_DISPLAY_NAME,
-                    "已最小化到系统托盘；右键托盘图标选「退出程序」可完全退出",
-                )
-            event.ignore()
-            return
+            action = self._confirm_close_action()
+            if action is None:
+                event.ignore()
+                return
+            from app.ui.dialogs.close_confirm_dialog import CloseWindowConfirmDialog
+
+            if action == CloseWindowConfirmDialog.ACTION_TRAY:
+                self._minimize_to_tray()
+                event.ignore()
+                return
+            self._allow_close = True
+        if self._has_background_tasks():
+            if self._allow_close:
+                self._cancel_background_tasks_for_exit()
+            else:
+                if getattr(self, "_scan_worker", None) is not None:
+                    self._scan_worker.request_cancel()
+                if getattr(self, "_vndb_worker", None) is not None:
+                    self._vndb_worker.request_cancel()
+                QMessageBox.information(self, "任务运行中", "请等待当前后台任务完成后再退出程序。")
+                event.ignore()
+                return
         self._teardown_tray()
         super().closeEvent(event)
         self._quit_application()
@@ -1012,182 +1110,43 @@ class MainWindow(
             return root
         return Path(__file__).resolve().parent.parent.parent
 
-    def _show_help(self) -> None:
-        """显示使用帮助"""
-        from PySide6.QtWidgets import QDialog, QDialogButtonBox, QTextBrowser
+    def _maybe_show_welcome(self) -> None:
+        from app.services.help_content import should_show_welcome_guide
 
-        from app.ui.dialogs.game_detail_dialog import reveal_in_explorer
+        if not should_show_welcome_guide(self.db.get_ui_preferences()):
+            return
+        self._show_help(first_run=True)
 
-        dialog = QDialog(self)
-        dialog.setWindowTitle("使用帮助")
-        dialog.setMinimumSize(560, 520)
-        layout = QVBoxLayout(dialog)
+    def _show_help(self, *, first_run: bool = False) -> None:
+        from app.ui.dialogs.help_dialog import HelpDialog
 
-        project_dir = self._resolve_project_dir()
-        shortcut_row = QHBoxLayout()
-        btn_open_project = QPushButton("📁 打开项目目录")
-        btn_open_project.setToolTip(
-            f"在资源管理器中打开项目根目录\n{project_dir}"
-        )
-        btn_open_data = QPushButton("💾 打开数据目录")
-        btn_open_data.setToolTip(
-            f"封面、存档备份与数据库所在目录\n{self.db.base_dir}"
-        )
+        dlg = HelpDialog(self, first_run=first_run)
+        dlg.action_requested.connect(self._on_help_demo_action)
+        dlg.exec()
+        if first_run and dlg.skip_welcome_on_next_launch():
+            self._persist_welcome_guide_dismissed()
 
-        def _open_dir(path: Path, *, title: str) -> None:
-            try:
-                reveal_in_explorer(str(path), select_file=False)
-            except FileNotFoundError:
-                QMessageBox.warning(dialog, title, f"目录不存在：\n{path}")
+    def _persist_welcome_guide_dismissed(self) -> None:
+        from app.services.help_content import UI_PREF_WELCOME_SHOWN
 
-        btn_open_project.clicked.connect(
-            lambda: _open_dir(project_dir, title="打开项目目录")
-        )
-        btn_open_data.clicked.connect(
-            lambda: _open_dir(self.db.base_dir, title="打开数据目录")
-        )
-        shortcut_row.addWidget(btn_open_project)
-        shortcut_row.addWidget(btn_open_data)
-        shortcut_row.addStretch()
-        layout.addLayout(shortcut_row)
+        prefs = dict(self.db.get_ui_preferences())
+        if prefs.get(UI_PREF_WELCOME_SHOWN):
+            return
+        prefs[UI_PREF_WELCOME_SHOWN] = True
+        self.db.set_ui_preferences(prefs)
 
-        browser = QTextBrowser()
-        browser.setOpenExternalLinks(True)
-        browser.setHtml("""
-        <style>
-            body { font-family: 'Microsoft YaHei', 'Segoe UI', sans-serif; color: #C8D0DC; }
-            h2 { color: #6A9FD8; font-size: 16px; border-bottom: 1px solid #3D4759; padding-bottom: 4px; }
-            h3 { color: #8AB4E0; font-size: 13px; margin-top: 14px; }
-            p, li { font-size: 12px; line-height: 1.6; }
-            ul, ol { padding-left: 20px; }
-            .shortcut { background: #2E3644; padding: 2px 6px; border-radius: 3px; font-family: monospace; }
-            .version { color: #8AB4E0; font-size: 13px; margin-bottom: 8px; }
-        </style>
-        <p class="version"><b>本地 Galgame 管理器 v2.2.0</b></p>
-
-        <h2>快速入门</h2>
-        <ol>
-            <li><b>添加目录</b> — 「导入管理」→「添加目录」，选择游戏根目录</li>
-            <li><b>导入游戏</b> — 「导入游戏」→「全量扫描」或「扫描并 VNDB 导入」</li>
-            <li><b>启动游戏</b> — 双击卡片；右键可选 LE 转区 / 管理员启动 / 调试启动</li>
-        </ol>
-
-        <h2>工具栏（分组）</h2>
-        <h3>搜索与筛选</h3>
-        <ul>
-            <li><b>搜索框</b> — 中/英/日关键词；下拉可复用历史记录</li>
-            <li><b>筛选</b> — 全部 / 仅收藏 / 已游玩 / 未游玩</li>
-            <li><b>排序</b> — 默认、添加时间、最近游玩、游玩次数、名称等</li>
-        </ul>
-        <h3>导入管理</h3>
-        <ul>
-            <li><b>添加目录</b> — 加入扫描范围</li>
-            <li><b>导入游戏</b> — 全量扫描、增量扫描、扫描并 VNDB 导入、增量扫描并增量 VNDB 导入（最快）</li>
-            <li><b>VNDB 导入</b> — 对现有库补全元数据与封面</li>
-            <li><b>刷新</b> — 重新加载列表与筛选结果</li>
-            <li><b>🚀 一键工作流</b> — 自动解压 → 增量扫描 → 增量 VNDB 导入，全流程一键完成</li>
-        </ul>
-        <h3>视图与浏览</h3>
-        <ul>
-            <li><b>网格 / 列表</b> — 切换视图；底部分页显示总数与页码，可跳转</li>
-            <li><b>🎲 随机</b> — 从当前列表随机选一款，支持「换一个」</li>
-            <li><b>📜 历史记录</b> — 游玩历史独立窗口</li>
-            <li><b>📋 日志</b> — 查看运行日志（含标准日志桥接，可打开日志目录）</li>
-        </ul>
-
-        <h2>「更多」菜单</h2>
-        <ul>
-            <li><b>管理目录</b> — 扫描路径管理</li>
-            <li><b>📁 数据管理</b> — 子菜单：游戏列表管理、新建用户、导出/恢复备份</li>
-            <li><b>▶️ 开机启动 / 💾 启动前备份 / 👁 显示隐藏游戏</b> — 可点击切换 ON/OFF（显示隐藏默认关，重启不记忆）</li>
-            <li><b>游玩历史</b> — 独立窗口查看全部记录</li>
-            <li><b>🔧 工具箱</b> — HBE、自动化解压、FDM、插件、LE、2DFan</li>
-            <li><b>⚙ 设置</b> — 综合设置：启动、封面、外观、工具路径、高级</li>
-        </ul>
-
-        <h2>工具箱（简要）</h2>
-        <ul>
-            <li><b>HBE 解密</b> — 离线解密 Hexo Blog Encrypt HTML（单文件 / 批量）</li>
-            <li><b>自动化解压</b> — 监控目录、扫描解压（进度、可停止）；支持 RAR 多卷分包（part1/part2）、7z 分卷、SFX 分卷；RAR5/ISO+MDS 等会自动选用合适工具；<b>仅光盘镜像（ISO+MDS）</b>展开后提示安装 setup.exe；解压后自动生成验收报告</li>
-            <li><b>FDM 下载管理</b> — 配置 Free Download Manager 路径，打开 FDM 或添加下载链接</li>
-            <li><b>插件管理</b> — 扫描 / 启动链路上的扩展钩子</li>
-            <li><b>🔑 密码本</b> — 管理解压密码：添加、删除、置顶、调整优先级、查看使用统计</li>
-        </ul>
-
-        <h2>游戏启动</h2>
-        <ul>
-            <li><b>普通启动</b> — 双击或右键启动</li>
-            <li><b>LE 转区启动</b> — 右键选择，支持 per-game 配置（日语/简中/繁中/韩语）；游戏目录自带 LEProc.exe 时自动使用</li>
-            <li><b>管理员启动</b> — 右键选择</li>
-            <li><b>调试启动</b> — 右键或游戏详情中，捕获退出码和诊断建议</li>
-            <li><b>自动重试</b> — 普通启动失败自动尝试 LE，LE 失败自动尝试普通</li>
-            <li><b>exe 不存在自动修复</b> — 启动文件丢失时自动搜索替代 exe</li>
-            <li><b>启动失败一键重试</b> — 失败弹窗提供 LE/管理员/调试重试按钮</li>
-        </ul>
-
-        <h2>设置（综合）</h2>
-        <ul>
-            <li><b>启动</b> — 双击打开方式（普通/强制LE/智能）、启动前自动备份、上次启动模式查看与重置</li>
-            <li><b>封面</b> — 封面获取策略（仅本地/本地优先/网图优先）</li>
-            <li><b>外观</b> — 预设主题、强调色、字体、布局（紧凑/圆角）、效果（动画/阴影/透明度）、自定义颜色（高级）；修改即时预览</li>
-            <li><b>工具路径</b> — LEProc.exe、2DFan 线索库、FDM 下载器；每项支持「自动检测」</li>
-            <li><b>高级</b> — 缓存与缩略图清理、插件管理、扩展工具快捷入口、删除确认开关</li>
-            <li><b>搜索</b> — 设置对话框顶部搜索框，输入关键词快速定位设置项</li>
-        </ul>
-
-        <h2>托盘与退出</h2>
-        <ul>
-            <li>点主窗口 <b>×</b> — 最小化到系统托盘，程序仍在运行</li>
-            <li>托盘图标右键 → <b>退出程序</b> — 真正结束进程</li>
-        </ul>
-
-        <h2>右键菜单</h2>
-        <ul>
-            <li><b>启动 / LE 转区 / 管理员启动 / 调试启动</b></li>
-            <li><b>游戏详情 / 存档管理 / 收藏 / 隐藏</b></li>
-            <li><b>编辑名称·路径 / 封面 / 分类 / 桌面快捷方式</b></li>
-            <li><b>从库中删除</b> — 可选同时删除安装文件夹（二次确认）</li>
-        </ul>
-
-        <h2>快捷键</h2>
-        <ul>
-            <li><span class="shortcut">双击</span> 启动游戏</li>
-            <li><span class="shortcut">右键</span> 上下文菜单</li>
-            <li><span class="shortcut">Ctrl+F</span> 聚焦搜索框</li>
-            <li><span class="shortcut">Ctrl+D</span> 收藏 / 取消收藏</li>
-            <li><span class="shortcut">Ctrl+H</span> 隐藏 / 取消隐藏</li>
-            <li><span class="shortcut">Ctrl+I</span> 打开游戏详情</li>
-        </ul>
-
-        <h2>常见问题</h2>
-        <ul>
-            <li><b>游戏未识别？</b> — 确认目录含 .exe，重新全量扫描</li>
-            <li><b>启动 exe 不对？</b> — 右键「编辑名称/路径」；或启动时自动搜索替代 exe</li>
-            <li><b>游戏启动闪退？</b> — 使用「调试启动」查看退出码和诊断建议；或设置 LE 转区配置</li>
-            <li><b>封面不显示？</b> — 调整封面策略或右键重新获取</li>
-            <li><b>解压/扫描看似卡住？</b> — 查看进度条与日志；大压缩包、ISO 展开耗时较长属正常</li>
-            <li><b>隐藏的游戏找不到？</b> — 「更多」→ 开启「👁 显示隐藏游戏」，或 <span class="shortcut">Ctrl+H</span> 取消隐藏</li>
-            <li><b>关了窗口还在后台？</b> — 用托盘「退出程序」；仅关窗口是进托盘</li>
-            <li><b>LE 转区灰色？</b> — 在「更多」→「⚙ 设置」→「工具路径」中配置 LEProc.exe，或点击「自动检测」</li>
-            <li><b>归档目录占空间？</b> — 「更多」→「📁 数据管理」→「文件管理」→ 一键清空归档目录</li>
-            <li><b>想一键完成下载→解压→导入？</b> — 点击工具栏「🚀 一键工作流」</li>
-            <li><b>解压密码管理？</b> — 一键工作流或自动化解压界面中的「🔑 管理密码本」按钮</li>
-            <li><b>缓存占空间？</b> — 「更多」→「⚙ 设置」→「高级」→ 缓存与缩略图清理</li>
-            <li><b>开机启动设置失败？</b> — 需以管理员身份运行程序</li>
-        </ul>
-
-        <p style="color: #5A6474; margin-top: 16px;">
-        项目主页：<a href="https://github.com/chunyangluo/Local-Galgame-Manager" style="color: #6A9FD8;">GitHub</a>
-        · 完整手册见仓库 <code>docs/USER_GUIDE.md</code>
-        </p>
-        """)
-        layout.addWidget(browser)
-
-        btn_box = QDialogButtonBox(QDialogButtonBox.Ok)
-        btn_box.accepted.connect(dialog.accept)
-        layout.addWidget(btn_box)
-
-        dialog.exec()
+    def _on_help_demo_action(self, action: str) -> None:
+        handlers = {
+            "add_root": self._add_scan_root,
+            "scan": self._scan_all,
+            "scan_vndb": self._scan_and_vndb_import,
+            "quick_workflow": self._open_quick_workflow,
+            "settings": self._open_settings,
+            "manage_roots": self._manage_scan_roots,
+        }
+        handler = handlers.get(action)
+        if handler is not None:
+            handler()
     
     def _on_settings_changed(self) -> None:
         """设置改变后的回调"""

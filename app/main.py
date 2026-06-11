@@ -17,6 +17,12 @@ def main() -> int:
     data_dir = get_app_data_dir()
     setup_logging(data_dir=data_dir)
     log = logging.getLogger(__name__)
+    try:
+        from app.services.auto_extract_service import config_yaml_path
+
+        config_yaml_path()
+    except Exception:
+        log.exception("Failed to initialize auto-extract runtime config")
     app = QApplication(sys.argv)
     setup_app_branding(app)
 

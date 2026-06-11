@@ -58,6 +58,25 @@ class TestGameCRUD:
         assert games[0].name == "TestGame"
         assert games[0].root_dir == normalize_game_dir("/games/test")
         assert games[0].cover_path == "/cover.jpg"
+        assert games[0].content_type == "game"
+
+    def test_upsert_video_content_type(self, db_with_user: tuple[Database, int]) -> None:
+        db, uid = db_with_user
+        db.upsert_game(
+            "Opening Movie",
+            "/media/opening",
+            "/media/opening/op.mp4",
+            content_type="video",
+        )
+
+        games = db.list_games(uid)
+        assert len(games) == 1
+        assert games[0].content_type == "video"
+        assert games[0].launch_exe == "/media/opening/op.mp4"
+
+        found = db.find_game_by_root("/media/opening")
+        assert found is not None
+        assert found.content_type == "video"
 
     def test_upsert_update(self, db_with_user: tuple[Database, int]) -> None:
         db, uid = db_with_user
@@ -241,6 +260,7 @@ class TestBatchUpsert:
         by_root = {normalize_game_dir(g.root_dir): g for g in games}
         assert by_root[normalize_game_dir("/g1")].vndb_id == "v1"
         assert by_root[normalize_game_dir("/g2")].rating == 7.0
+        assert by_root[normalize_game_dir("/g1")].content_type == "game"
 
     def test_upsert_games_batch_empty(self, db: Database) -> None:
         assert db.upsert_games_batch([]) == 0

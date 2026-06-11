@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import ctypes
 import os
 import subprocess
@@ -396,6 +397,8 @@ class GameLauncher:
             if leproc.name.lower() != "leproc.exe":
                 raise ValueError("Locale Emulator setting must point to LEProc.exe")
 
+        game_exe_name = exe.name
+        before_pids = self._process_ids_by_name(game_exe_name)
         cmd = self._build_le_cmd(leproc_exe, target_exe, le_profile_guid)
         env = os.environ.copy()
         env["PATH"] = str(exe.parent) + os.pathsep + env["PATH"]
@@ -415,9 +418,9 @@ class GameLauncher:
 
         # LEProc exits quickly after injecting into the game process.
         # Wait a moment, then check if the game process is actually running.
-        game_exe_name = exe.name
         time.sleep(3)
-        if not self._is_process_running(game_exe_name):
+        target_pids = self._process_ids_by_name(game_exe_name) - before_pids
+        if not target_pids:
             raise RuntimeError(
                 f"LE 转区启动失败：LEProc 已退出但游戏进程 ({game_exe_name}) 未运行。\n"
                 "可能原因：游戏缺少运行库、Graphics.dll 加载失败、或需要不同的 LE 配置。\n"
@@ -425,28 +428,53 @@ class GameLauncher:
             )
 
         # Game is running — wait for it to exit
-        ended = self._wait_for_process_exit(game_exe_name, started)
+        ended = self._wait_for_process_exit(game_exe_name, started, target_pids=target_pids)
         return max(0, ended - started)
 
     @staticmethod
     def _is_process_running(name: str) -> bool:
         """Check if a process with the given name is running (Windows only)."""
+        return bool(GameLauncher._process_ids_by_name(name))
+
+    @staticmethod
+    def _process_ids_by_name(name: str) -> set[int]:
+        """Return process IDs matching the image name (Windows only)."""
         if sys.platform != "win32":
-            return False
+            return set()
         try:
             result = subprocess.run(
                 ["tasklist", "/FI", f"IMAGENAME eq {name}", "/FO", "CSV", "/NH"],
                 capture_output=True, text=True, timeout=5,
             )
-            return name.lower() in result.stdout.lower()
+            pids: set[int] = set()
+            for row in csv.reader(result.stdout.splitlines()):
+                if len(row) < 2:
+                    continue
+                if row[0].strip('"').lower() != name.lower():
+                    continue
+                try:
+                    pids.add(int(row[1]))
+                except ValueError:
+                    continue
+            return pids
         except Exception:
-            return False
+            return set()
 
     @staticmethod
-    def _wait_for_process_exit(name: str, started: int, poll_interval: float = 2.0) -> int:
+    def _wait_for_process_exit(
+        name: str,
+        started: int,
+        poll_interval: float = 2.0,
+        *,
+        target_pids: set[int] | None = None,
+    ) -> int:
         """Poll until the process with given name exits. Returns end timestamp."""
         while True:
-            if not GameLauncher._is_process_running(name):
+            running_pids = GameLauncher._process_ids_by_name(name)
+            if target_pids is not None:
+                if running_pids.isdisjoint(target_pids):
+                    return int(time.time())
+            elif not running_pids:
                 return int(time.time())
             time.sleep(poll_interval)
 

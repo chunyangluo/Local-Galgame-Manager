@@ -57,6 +57,7 @@ class FeatureSelfTester:
             _run_check("search_filter", self._check_search_filter),
             _run_check("plugin_pipeline", self._check_plugin_pipeline),
             _run_check("cover_manager_custom_cover", self._check_cover_manager),
+            _run_check("launcher_basic", self._check_launcher_basic),
             _run_check("vndb_normalization", self._check_vndb_normalization),
             _run_check("path_utils", self._check_path_utils),
             _run_check("auto_extract_integration", self._check_auto_extract),
@@ -68,12 +69,16 @@ class FeatureSelfTester:
             checks.append(_run_check("vndb_network_search", self._check_vndb_network))
         if self.with_ui:
             checks.append(_run_check("ui_smoke_init", self._check_ui_smoke))
+            checks.append(_run_check("ui_help_auto_extract_dialogs", self._check_ui_dialogs))
         return checks
 
     def cleanup(self) -> None:
         if self.keep_temp:
             return
-        self._tmp.cleanup()
+        try:
+            self._tmp.cleanup()
+        except (PermissionError, OSError):
+            pass
 
     # ── original checks ──
 
@@ -134,6 +139,24 @@ class FeatureSelfTester:
                 raise RuntimeError(f"Unexpected cover size: {img.size}")
         return f"cover_saved={out_path.name}"
 
+    def _check_launcher_basic(self) -> str:
+        import sys
+
+        from app.core.launcher import GameLauncher
+
+        launch_dir = self.base / "launch_target"
+        launch_dir.mkdir(exist_ok=True)
+        if sys.platform == "win32":
+            target = launch_dir / "launch-ok.cmd"
+            target.write_text("@echo off\r\nexit /b 0\r\n", encoding="utf-8")
+        else:
+            target = launch_dir / "launch-ok.sh"
+            target.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+            target.chmod(0o755)
+
+        duration = GameLauncher().launch(str(target))
+        return f"duration={duration}s"
+
     def _check_vndb_normalization(self) -> str:
         raw = {
             "id": "v17",
@@ -167,15 +190,51 @@ class FeatureSelfTester:
     def _check_ui_smoke(self) -> str:
         from PySide6.QtWidgets import QApplication
 
+        from app.services.help_content import UI_PREF_WELCOME_SHOWN
         from app.ui.main_window import MainWindow
+
+        db = Database(self.data_dir)
+        prefs = dict(db.get_ui_preferences())
+        prefs[UI_PREF_WELCOME_SHOWN] = True
+        db.set_ui_preferences(prefs)
 
         app = QApplication.instance() or QApplication([])
         win = MainWindow(self.data_dir)
         win.close()
+        win.db.close()
+        win.deleteLater()
         # Avoid quitting existing app instance if user already has one.
         if QApplication.instance() is app:
             app.processEvents()
         return "main_window_init_ok"
+
+    def _check_ui_dialogs(self) -> str:
+        from PySide6.QtWidgets import QApplication
+
+        from app.services.auto_extract_service import config_yaml_path
+        from app.ui.dialogs.auto_extract_dialog import AutoExtractDialog
+        from app.ui.dialogs.help_dialog import HelpDialog
+        from app.ui.main_window import MainWindow
+
+        app = QApplication.instance() or QApplication([])
+        win = MainWindow(self.data_dir)
+        help_dialog = HelpDialog(win, first_run=True)
+        auto_dialog = AutoExtractDialog(win)
+
+        cfg = config_yaml_path()
+        if cfg is None or not cfg.is_file():
+            raise RuntimeError("AutoExtractDialog did not create runtime config")
+
+        auto_dialog.close()
+        help_dialog.close()
+        win.close()
+        win.db.close()
+        auto_dialog.deleteLater()
+        help_dialog.deleteLater()
+        win.deleteLater()
+        if QApplication.instance() is app:
+            app.processEvents()
+        return "help_dialog_ok=True, auto_extract_dialog_ok=True"
 
     # ── new checks ──
 

@@ -11,15 +11,20 @@ from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QTextEdit,
     QVBoxLayout,
     QWidget,
 )
+
+from app.ui.dialog_presenter import present_auxiliary_dialog
 
 
 class StepStatus(Enum):
@@ -52,7 +57,7 @@ class StepWidget(QGroupBox):
         layout.setContentsMargins(12, 8, 12, 8)
 
         self._desc_label = QLabel(description)
-        self._desc_label.setStyleSheet("color:#93A1B6;font-size:12px;")
+        self._desc_label.setStyleSheet("color:#93A1B6;font-size:13px;")
         layout.addWidget(self._desc_label)
 
         row = QHBoxLayout()
@@ -106,8 +111,8 @@ class QuickWorkflowDialog(QDialog):
         super().__init__(parent)
         self._main = main_window
         self.setWindowTitle("一键工作流")
-        self.setMinimumSize(560, 640)
-        self.resize(620, 700)
+        self.setMinimumSize(600, 720)
+        self.resize(660, 820)
         self._running = False
         self._cancelled = False
         self._setup_ui()
@@ -123,50 +128,74 @@ class QuickWorkflowDialog(QDialog):
         layout.addWidget(header)
 
         desc = QLabel("自动执行：解压监控目录中的压缩包 → 增量扫描新游戏 → 增量 VNDB 元数据导入")
-        desc.setStyleSheet("color:#93A1B6;font-size:12px;")
+        desc.setStyleSheet("color:#93A1B6;font-size:13px;")
         desc.setWordWrap(True)
         desc.setAlignment(Qt.AlignCenter)
         layout.addWidget(desc)
 
-        # Steps
+        # Steps — scrollable so the log panel keeps enough height
+        steps_scroll = QScrollArea()
+        steps_scroll.setWidgetResizable(True)
+        steps_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        steps_scroll.setMaximumHeight(300)
+        steps_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        steps_body = QWidget()
+        steps_layout = QVBoxLayout(steps_body)
+        steps_layout.setContentsMargins(0, 0, 4, 0)
+        steps_layout.setSpacing(8)
+
         self._step_extract = StepWidget("步骤 1：自动解压", "扫描监控目录中的压缩包并自动解压到目标目录")
-        layout.addWidget(self._step_extract)
+        steps_layout.addWidget(self._step_extract)
 
         self._step_clean_dead = StepWidget("步骤 2：清理死链接", "检测并清理文件夹已不存在的游戏记录")
-        layout.addWidget(self._step_clean_dead)
+        steps_layout.addWidget(self._step_clean_dead)
 
         self._step_scan = StepWidget("步骤 3：增量扫描", "扫描游戏目录，仅导入新增游戏（跳过已有记录）")
-        layout.addWidget(self._step_scan)
+        steps_layout.addWidget(self._step_scan)
 
         self._step_vndb = StepWidget("步骤 4：增量 VNDB 导入", "为新导入的游戏匹配 VNDB/Bangumi 元数据与封面")
-        layout.addWidget(self._step_vndb)
+        steps_layout.addWidget(self._step_vndb)
 
         self._step_done = StepWidget("完成", "工作流执行完毕")
-        layout.addWidget(self._step_done)
+        steps_layout.addWidget(self._step_done)
 
-        # Log area
+        steps_scroll.setWidget(steps_body)
+        layout.addWidget(steps_scroll)
+
+        # Log area — primary reading surface during workflow runs
         log_group = QGroupBox("运行日志")
+        log_group.setStyleSheet("QGroupBox { font-size: 14px; font-weight: 600; }")
         log_layout = QVBoxLayout(log_group)
+        log_layout.setContentsMargins(10, 14, 10, 10)
         self._log = QTextEdit()
         self._log.setReadOnly(True)
-        self._log.setFont(QFont("Consolas", 9))
+        self._log.setMinimumHeight(240)
+        self._log.setFont(QFont("Consolas", 11))
         self._log.setStyleSheet(
-            "QTextEdit{background-color:#1C2230;color:#E5E7EB;border:1px solid #374151;border-radius:4px;padding:6px;}"
+            "QTextEdit{"
+            "background-color:#1C2230;"
+            "color:#E5E7EB;"
+            "border:1px solid #374151;"
+            "border-radius:6px;"
+            "padding:10px;"
+            "font-size:13px;"
+            "line-height:1.45;"
+            "}"
         )
         self._log.setPlaceholderText("运行日志将显示在这里…")
         log_layout.addWidget(self._log)
-        layout.addWidget(log_group, 1)
+        layout.addWidget(log_group, 2)
 
         # Buttons
         btn_row = QHBoxLayout()
 
         self._btn_fdm = QPushButton("📥 FDM 下载")
-        self._btn_fdm.setToolTip("打开 FDM 下载管理或添加下载链接")
+        self._btn_fdm.setToolTip("打开 FDM 下载窗口，粘贴链接并发送到 Free Download Manager")
         self._btn_fdm.clicked.connect(self._open_fdm)
         btn_row.addWidget(self._btn_fdm)
 
         self._btn_pwd = QPushButton("🔑 管理密码本")
-        self._btn_pwd.setToolTip("添加、删除、排序解压密码")
+        self._btn_pwd.setToolTip("打开密码本管理窗口，维护解压密码列表")
         self._btn_pwd.clicked.connect(self._open_password_manager)
         btn_row.addWidget(self._btn_pwd)
 
@@ -192,12 +221,28 @@ class QuickWorkflowDialog(QDialog):
     def _open_fdm(self) -> None:
         from app.ui.dialogs.fdm_dialog import FdmDialog
 
-        FdmDialog(self._main).exec()
+        try:
+            if getattr(self, "_fdm_dlg", None) is not None and self._fdm_dlg.isVisible():
+                present_auxiliary_dialog(self, self._fdm_dlg)
+                return
+            self._fdm_dlg = FdmDialog(self._main, parent=self)
+            present_auxiliary_dialog(self, self._fdm_dlg)
+        except Exception as e:
+            QMessageBox.warning(self, "打开失败", str(e))
 
     def _open_password_manager(self) -> None:
         from app.ui.dialogs.password_manager_dialog import PasswordManagerDialog
 
-        PasswordManagerDialog(self).exec()
+        try:
+            if getattr(self, "_pwd_dlg", None) is not None and self._pwd_dlg.isVisible():
+                present_auxiliary_dialog(self, self._pwd_dlg)
+                return
+            self._pwd_dlg = PasswordManagerDialog(self)
+            self._pwd_dlg.setWindowTitle("密码本管理")
+            self._pwd_dlg.resize(560, 480)
+            present_auxiliary_dialog(self, self._pwd_dlg)
+        except Exception as e:
+            QMessageBox.warning(self, "打开失败", str(e))
 
     def _log_message(self, msg: str) -> None:
         from datetime import datetime
@@ -450,6 +495,10 @@ class QuickWorkflowDialog(QDialog):
         existing_dirs = self._main.db.list_all_game_dirs()
         new_rows = [row for row in rows if normalize_game_dir(row[1]) not in existing_dirs]
         skipped = len(rows) - len(new_rows)
+        video_rows = [row for row in new_rows if self._scan_row_content_type(row) == "video"]
+        game_rows = [row for row in new_rows if self._scan_row_content_type(row) == "game"]
+        for name, root_dir, launch_path, *_ in video_rows:
+            self._main.db.upsert_game(name, root_dir, launch_path, content_type="video")
 
         if not new_rows:
             self._step_scan.set_status(StepStatus.SKIPPED, f"未发现新游戏（已跳过 {skipped} 个已有）")
@@ -457,10 +506,18 @@ class QuickWorkflowDialog(QDialog):
             self._run_step_vndb([])
             return
 
-        self._step_scan.set_status(StepStatus.SUCCESS, f"发现 {len(new_rows)} 个新游戏（跳过 {skipped} 个已有）")
-        self._log_message(f"增量扫描完成：发现 {len(new_rows)} 个新游戏")
-        self._scan_rows = new_rows
-        self._run_step_vndb(new_rows)
+        if not game_rows:
+            self._step_scan.set_status(StepStatus.SUCCESS, f"导入 {len(video_rows)} 个视频（跳过 {skipped} 个已有）")
+            self._log_message(f"增量扫描完成：导入 {len(video_rows)} 个视频，无新游戏")
+            self._main.refresh_games()
+            self._run_step_vndb([])
+            return
+
+        suffix = f"，视频 {len(video_rows)} 个" if video_rows else ""
+        self._step_scan.set_status(StepStatus.SUCCESS, f"发现 {len(game_rows)} 个新游戏{suffix}（跳过 {skipped} 个已有）")
+        self._log_message(f"增量扫描完成：发现 {len(game_rows)} 个新游戏{suffix}")
+        self._scan_rows = game_rows
+        self._run_step_vndb([(row[0], row[1], row[2]) for row in game_rows])
 
     # ---- Step 3: Incremental VNDB import ----
 
@@ -498,3 +555,9 @@ class QuickWorkflowDialog(QDialog):
         self._log_message("VNDB 增量导入完成")
         self._main.refresh_games()
         self._finish_workflow(True)
+
+    @staticmethod
+    def _scan_row_content_type(row: tuple) -> str:
+        if len(row) >= 4 and str(row[3]).strip().lower() == "video":
+            return "video"
+        return "game"

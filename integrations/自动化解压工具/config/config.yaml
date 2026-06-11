@@ -4,14 +4,14 @@ app:
   api_key: ""
 
 directories:
-  watch: "D:\\Download\\galgame"
-  target: "D:\\Download\\galgame\\_extract"
-  archive: "D:\\Download\\galgame\\_archive"
-  failed: "D:\\Download\\galgame\\_failed"
-  temp: "D:\\Download\\galgame\\_temp"
+  watch: ""
+  target: ""
+  archive: ""
+  failed: ""
+  temp: ""
   logs: "./data/logs"
-  upload: "D:\\Download\\galgame\\_upload"
-  game_save: "E:\\private\\galgame"
+  upload: ""
+  game_save: ""
 
 seven_zip:
   path: "./bin/7za.exe"

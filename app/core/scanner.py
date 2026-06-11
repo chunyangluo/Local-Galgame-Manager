@@ -146,6 +146,14 @@ class ScanResult:
     game_name: str
     game_dir: str
     launch_exe: str
+    content_type: str = "game"
+    entry_path: str = ""
+
+
+VIDEO_EXTENSIONS = {
+    ".mp4", ".mkv", ".avi", ".wmv", ".flv",
+    ".mov", ".webm", ".m4v", ".ts", ".m2ts",
+}
 
 
 class GameScanner:
@@ -169,11 +177,38 @@ class GameScanner:
             print(f"[Scanner] Error iterating game directories in {root}: {e}")
             return []
         
+        for video_file in self._iter_top_level_video_files(root_path):
+            from app.services.path_utils import normalize_game_dir
+
+            results.append(
+                ScanResult(
+                    game_name=self._resolve_video_name(video_file),
+                    game_dir=normalize_game_dir(video_file),
+                    launch_exe=str(video_file),
+                    content_type="video",
+                    entry_path=str(video_file),
+                )
+            )
+
         for directory in game_dirs:
             try:
                 candidate = self._pick_main_exe(directory)
                 if candidate is None:
-                    no_exe_dirs.append(str(directory))
+                    video = self._pick_main_video(directory)
+                    if video is None:
+                        no_exe_dirs.append(str(directory))
+                        continue
+                    from app.services.path_utils import normalize_game_dir
+
+                    results.append(
+                        ScanResult(
+                            game_name=self._resolve_video_name(video),
+                            game_dir=normalize_game_dir(directory),
+                            launch_exe=str(video),
+                            content_type="video",
+                            entry_path=str(video),
+                        )
+                    )
                     continue
                 from app.services.path_utils import normalize_game_dir
 
@@ -182,6 +217,8 @@ class GameScanner:
                         game_name=self._resolve_game_name(directory),
                         game_dir=normalize_game_dir(directory),
                         launch_exe=str(candidate),
+                        content_type="game",
+                        entry_path=str(candidate),
                     )
                 )
             except Exception as e:
@@ -346,6 +383,50 @@ class GameScanner:
             return None
         
         return scored[0][1]
+
+    def _iter_top_level_video_files(self, root_path: Path) -> list[Path]:
+        try:
+            return [
+                p for p in sorted(root_path.iterdir())
+                if p.is_file() and self._is_real_video_file(p)
+            ]
+        except (PermissionError, OSError):
+            return []
+
+    def _pick_main_video(self, directory: Path) -> Path | None:
+        try:
+            videos = [p for p in directory.rglob("*") if p.is_file() and self._is_real_video_file(p)]
+        except (PermissionError, OSError):
+            return None
+        if not videos:
+            return None
+        videos.sort(key=lambda p: (p.stat().st_size if p.exists() else 0, len(p.parts)), reverse=True)
+        return videos[0]
+
+    def _is_real_video_file(self, path: Path) -> bool:
+        if path.suffix.lower() not in VIDEO_EXTENSIONS:
+            return False
+        return not self._looks_like_archive(path)
+
+    @staticmethod
+    def _looks_like_archive(path: Path) -> bool:
+        try:
+            with open(path, "rb") as f:
+                header = f.read(512)
+                size = path.stat().st_size
+                if size > 65536:
+                    f.seek(-65536, 2)
+                else:
+                    f.seek(0)
+                tail = f.read()
+        except OSError:
+            return False
+        signatures = (b"PK\x03\x04", b"PK\x05\x06", b"Rar!\x1a\x07", b"7z\xbc\xaf\x27\x1c")
+        return any(sig in header or sig in tail for sig in signatures)
+
+    def _resolve_video_name(self, path: Path) -> str:
+        name = path.stem.translate(_FULLWIDTH_MAP)
+        return self._strip_dir_suffix(name).strip() or path.stem
 
     def _should_skip_directory(self, directory: Path) -> bool:
         lower_name = directory.name.strip().lower()

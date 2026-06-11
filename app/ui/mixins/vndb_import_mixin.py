@@ -30,7 +30,14 @@ class VndbImportMixin:
         if not self.games_cache:
             self.status.setText("当前无游戏记录，请先执行扫描")
             return
-        targets = [(g.name, g.root_dir, g.launch_exe) for g in self.games_cache]
+        targets = [
+            (g.name, g.root_dir, g.launch_exe)
+            for g in self.games_cache
+            if getattr(g, "content_type", "game") == "game"
+        ]
+        if not targets:
+            self.status.setText("当前没有可导入 VNDB 的游戏条目")
+            return
         self._scan_running = True
         self._start_scan_ui()
         self.status.setText(f"开始 VNDB 批量导入（共 {len(targets)} 项）...")

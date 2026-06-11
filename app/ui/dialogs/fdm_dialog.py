@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QGuiApplication
 from PySide6.QtWidgets import (
     QDialog,
@@ -16,6 +17,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QVBoxLayout,
+    QWidget,
 )
 
 from app.services.fdm_service import (
@@ -31,8 +33,8 @@ if TYPE_CHECKING:
 
 
 class FdmDialog(QDialog):
-    def __init__(self, main: MainWindow) -> None:
-        super().__init__(main)
+    def __init__(self, main: MainWindow, parent: QWidget | None = None) -> None:
+        super().__init__(parent if parent is not None else main)
         self._main = main
         self.setWindowTitle("Free Download Manager")
         self.setMinimumWidth(520)
@@ -40,7 +42,12 @@ class FdmDialog(QDialog):
         layout = QVBoxLayout(self)
         hint = QLabel(
             "通过 FDM 下载 galgame 资源包。可仅打开 FDM，或粘贴链接后自动新建下载任务。"
+            '<br><span style="color:#93A1B6;font-size:11px;">'
+            '未安装 FDM？<a href="https://www.freedownloadmanager.org/zh/">官方中文站下载</a>'
+            "</span>"
         )
+        hint.setTextFormat(Qt.TextFormat.RichText)
+        hint.setOpenExternalLinks(True)
         hint.setWordWrap(True)
         layout.addWidget(hint)
 

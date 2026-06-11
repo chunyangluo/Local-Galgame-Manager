@@ -35,6 +35,8 @@ class SearchService:
                     game.name.lower(),
                     (game.title_localized or "").lower(),
                     (game.title_original or "").lower(),
+                    "视频" if getattr(game, "content_type", "game") == "video" else "游戏",
+                    str(getattr(game, "content_type", "game")).lower(),
                 ]
                 # 如果有窗口标题也加入搜索
                 if hasattr(game, "window_title") and game.window_title:

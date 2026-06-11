@@ -106,8 +106,7 @@ def _is_unsafe_install_path(root: Path) -> bool:
     return False
 
 
-def delete_game_install_folder(root_dir: str, launch_exe: str) -> None:
-    """Permanently remove the game installation directory. Raises on unsafe or failed paths."""
+def _validate_install_folder_deletion(root_dir: str, launch_exe: str) -> Path:
     root = Path(root_dir)
     if not root.is_dir():
         raise ValueError(f"安装目录不存在或不是文件夹：{root_dir}")
@@ -124,6 +123,12 @@ def delete_game_install_folder(root_dir: str, launch_exe: str) -> None:
             except ValueError:
                 raise ValueError("启动程序不在安装目录内，为保护数据已拒绝删除整个文件夹")
 
+    return root_resolved
+
+
+def delete_game_install_folder(root_dir: str, launch_exe: str) -> None:
+    """Permanently remove the game installation directory. Raises on unsafe or failed paths."""
+    root_resolved = _validate_install_folder_deletion(root_dir, launch_exe)
     try:
         shutil.rmtree(root_resolved)
     except OSError as exc:
@@ -181,8 +186,8 @@ def delete_game_from_library(
     Delete one game row and clean save-backup zips / cover cache files under data dir.
     Optionally delete ``root_dir`` on disk when ``delete_install_folder`` is True.
 
-    Install folder and cache files are removed before the DB row so a failure leaves
-    the library record intact.
+    The DB row is removed before disk files so a database failure never deletes
+    the install folder first.
     """
     row = db.conn.execute(
         """
@@ -226,11 +231,14 @@ def delete_game_from_library(
             cover_candidates.append(p)
 
     if delete_install_folder:
-        delete_game_install_folder(root_dir, launch_exe)
-
-    _cleanup_game_cache_files(db, game_id, zip_paths, cover_candidates)
+        _validate_install_folder_deletion(root_dir, launch_exe)
 
     if not db.delete_game(game_id):
         raise ValueError("删除失败")
+
+    if delete_install_folder:
+        delete_game_install_folder(root_dir, launch_exe)
+
+    _cleanup_game_cache_files(db, game_id, zip_paths, cover_candidates)
 
     return display

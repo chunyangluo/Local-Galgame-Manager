@@ -67,10 +67,11 @@ class ViewMixin:
             n = len(self.filtered_games)
             total = len(self.games_cache)
             hidden = total - n
+            label = self._library_count_label(self.filtered_games)
             if hidden > 0 and not self.show_hidden_games:
-                self.status.setText(f"共 {n} 个游戏（{hidden} 个已隐藏）")
+                self.status.setText(f"{label}（{hidden} 个已隐藏）")
             else:
-                self.status.setText(f"共 {n} 个游戏")
+                self.status.setText(label)
         else:
             self._library_stack.setCurrentWidget(self.games_list)
             self._start_incremental_render()
@@ -85,16 +86,16 @@ class ViewMixin:
             total = len(self.games_cache)
             hidden = total - len(self.filtered_games)
             if hidden > 0 and not self.show_hidden_games:
-                self.status.setText(f"共 0 个游戏（{hidden} 个已隐藏）")
+                self.status.setText(f"共 0 个条目（{hidden} 个已隐藏）")
             else:
-                self.status.setText(f"共 0 个游戏")
+                self.status.setText("共 0 个条目")
             return
         self.status.setText(f"正在渲染 0/{self._render_total} ...")
         self._render_next_batch()
 
     def _render_next_batch(self) -> None:
         if self._render_index >= self._render_total:
-            self.status.setText(f"共 {self._render_total} / {len(self.games_cache)} 个游戏")
+            self.status.setText(self._library_count_label(self.filtered_games))
             return
         end = min(self._render_index + self._render_batch_size, self._render_total)
         for idx in range(self._render_index, end):
@@ -120,7 +121,7 @@ class ViewMixin:
             self.status.setText(f"正在渲染 {self._render_index}/{self._render_total} ...")
             self._render_timer.start(0)
         else:
-            self.status.setText(f"共 {self._render_total} / {len(self.games_cache)} 个游戏")
+            self.status.setText(self._library_count_label(self.filtered_games))
 
     def _selected_game(self) -> GameRecord | None:
         if self._is_grid_view:
@@ -143,10 +144,20 @@ class ViewMixin:
         if game is None:
             self._update_action_state()
             return
+        kind = "视频" if getattr(game, "content_type", "game") == "video" else "游戏"
+        recent_label = "最近打开" if kind == "视频" else "最近游玩"
         self.status.setText(
-            f"{game.name} | 最近游玩: {game.last_played_at or '无'} | 分类: {game.categories or '无'}"
+            f"{game.name} | 类型: {kind} | {recent_label}: {game.last_played_at or '无'} | 分类: {game.categories or '无'}"
         )
         self._update_action_state()
+
+    @staticmethod
+    def _library_count_label(games: list[GameRecord]) -> str:
+        video_count = sum(1 for g in games if getattr(g, "content_type", "game") == "video")
+        game_count = len(games) - video_count
+        if video_count:
+            return f"共 {len(games)} 个条目（游戏 {game_count}，视频 {video_count}）"
+        return f"共 {len(games)} 个游戏"
 
     def _message_box_parent(self, explicit):
         if explicit is not None:

@@ -1,6 +1,6 @@
 # Local Galgame Manager
 
-**版本**: v2.2.0 | [下载最新版](https://github.com/chunyangluo/Local-Galgame-Manager/releases/latest)
+**版本**: v2.2.1 | [下载最新版](https://github.com/chunyangluo/Local-Galgame-Manager/releases/latest)
 
 <p align="center">
   <img src="docs/assets/main-window.png" alt="Local Galgame Manager 主界面" width="820" />
@@ -53,6 +53,26 @@
 
 **托盘**：点窗口 **×** 为最小化到托盘；托盘菜单 **「退出程序」** 才会结束进程。
 
+### 界面截图
+
+以下截图来自 `软件演示图片/`，发布前如界面有明显变化，请先更新该目录截图，再同步到 `docs/assets/` 与帮助页资源。
+
+<p align="center">
+  <img src="docs/assets/main-window.png" alt="主界面" width="820" />
+</p>
+
+<p align="center">
+  <img src="docs/assets/quick-workflow.png" alt="一键工作流页面" width="620" />
+</p>
+
+| 功能 | 截图 |
+|------|------|
+| 自动化解压工具 | <img src="docs/assets/auto-extract.png" alt="自动化解压工具页面" width="420" /> |
+| 随机选择 | <img src="docs/assets/random-picker.png" alt="随机选择页面" width="420" /> |
+| 历史记录 | <img src="docs/assets/play-history.png" alt="历史记录页面" width="420" /> |
+| 系统日志 | <img src="docs/assets/log-window.png" alt="系统日志页面" width="420" /> |
+| Locale Emulator 配置 | <img src="docs/assets/locale-emulator-settings.png" alt="LE 配置页面" width="420" /> |
+
 ### 存档管理
 
 - 右键或详情 **「存档管理…」**：指定 `custom_save_root`、ZIP 备份/还原（SHA256）、自动发现（含可选 2DFan 线索库）
@@ -78,7 +98,7 @@
 
 ## 技术栈
 
-- Python 3.12+ · PySide6 · SQLite · PyInstaller · pytest（**191** 项测试）+ 功能自检（**11** 项）
+- Python 3.12+ · PySide6 · SQLite · PyInstaller · pytest + 功能自检（含 UI 冒烟）
 - 主窗口 **Mixin 架构**：`scan` / `vndb_import` / `cover` / `launch` / `game_action` / `view`
 
 ---
@@ -143,15 +163,32 @@ python -m app.feature_selftest --with-ui       # 含 UI 冒烟测试
 # 0. 结束旧实例（源码 / 打包版进程名相同）
 Stop-Process -Name LocalGalgameManager -Force -ErrorAction SilentlyContinue
 
-# 1. 测试
+# 1. 测试与源码冒烟
 python -m pytest tests/ -q
-python -m app.feature_selftest
+python -m app.feature_selftest --with-ui --json
 
 # 2. 打包（内含停进程 + pip + PyInstaller + 复制到 latest）
+#    build.ps1 会校验自动化解压模板：禁止本机盘符路径、禁止密码/成功记录入包
 ./build.ps1
 
-# 2b. 启动打包版做一次冒烟验证
-Start-Process "dist\builds\latest\LocalGalgameManager\LocalGalgameManager.exe"
+# 2b. 用临时 LOCALAPPDATA 模拟新用户首次启动
+$exe = "dist\builds\latest\LocalGalgameManager\LocalGalgameManager.exe"
+$tmp = Join-Path $env:TEMP ("lgm-release-smoke-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+$oldLocalAppData = $env:LOCALAPPDATA
+$env:LOCALAPPDATA = $tmp
+$p = Start-Process -FilePath $exe -PassThru
+Start-Sleep -Seconds 8
+if ($p.HasExited) { throw "打包版首次启动后异常退出" }
+Stop-Process -Id $p.Id -Force
+$env:LOCALAPPDATA = $oldLocalAppData
+
+# 2c. 人工检查新用户体验
+# - 首次启动欢迎/帮助页可读，主界面截图正常
+# - 添加目录 → 扫描 → 普通启动（可用临时 exe/cmd 冒烟）
+# - 一键工作流与自动化解压 UI 可打开
+# - 自动化解压运行时配置位于 %LOCALAPPDATA%\LocalGalgameManager\data\auto_extract\config\
+# - FDM / LE / 2DFan / VNDB 等外部依赖在帮助页和设置中有清晰提示
 
 # 3. 打 zip（将 BUILD_ID 与版本号替换为实际值）
 $ver = "v2.0.12"
@@ -175,8 +212,9 @@ gh release create v2.2.0 --title "Local Galgame Manager v2.2.0" --notes-file CHA
 
 | 步骤 | 说明 |
 |------|------|
-| 测试 | `pytest` 全绿后再打包 |
-| `build.ps1` | 打包前关闭正在运行的 exe |
+| 测试 | `pytest` 与 `feature_selftest --with-ui` 全绿后再打包 |
+| `build.ps1` | 打包前关闭正在运行的 exe，并阻止本机路径/密码记录进入发布包 |
+| 新用户冒烟 | 必须用临时 `LOCALAPPDATA` 启动打包版，确认首次启动、数据目录、帮助页、扫描与自动化解压入口正常 |
 | 版本 | 同步 `README` 顶部、`CHANGELOG` 首段、`gh release` 标签 |
 | `gh` | [GitHub CLI](https://cli.github.com/) + `gh auth login` |
 

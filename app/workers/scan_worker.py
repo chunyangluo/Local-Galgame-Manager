@@ -25,7 +25,7 @@ class ScanWorker(QObject):
     def run(self) -> None:
         try:
             imported = 0
-            rows: list[tuple[str, str, str]] = []
+            rows: list[tuple[str, str, str, str]] = []
             total_roots = len(self.roots)
             for idx, root in enumerate(self.roots, start=1):
                 if self._cancel_requested:
@@ -37,7 +37,7 @@ class ScanWorker(QObject):
                     if self._cancel_requested:
                         self.finished.emit(self.roots, rows, imported, "__CANCELLED__")
                         return
-                    rows.append((result.game_name, result.game_dir, result.launch_exe))
+                    rows.append((result.game_name, result.game_dir, result.launch_exe, result.content_type))
                     imported += 1
                 self.progress.emit(idx, total_roots, imported, root)
             self.finished.emit(self.roots, rows, imported, "")

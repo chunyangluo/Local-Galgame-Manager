@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 from pathlib import Path
 from typing import Optional
@@ -15,7 +16,7 @@ PINNED_PASSWORDS = ["6868", "9"]
 class PasswordManager:
     def __init__(self) -> None:
         self._settings = get_settings()
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._passwords: list[str] = []
         self._success_map: dict[str, str] = {}
         self._success_counts: dict[str, int] = {}
@@ -60,8 +61,12 @@ class PasswordManager:
             "success_map": self._success_map,
             "success_counts": self._success_counts,
         }
-        with open(fp, "w", encoding="utf-8") as f:
+        tmp = fp.with_name(f"{fp.name}.tmp")
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        tmp.replace(fp)
 
     def get_passwords(self) -> list[str]:
         with self._lock:

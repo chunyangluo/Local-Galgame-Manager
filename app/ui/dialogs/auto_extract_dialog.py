@@ -51,6 +51,7 @@ from app.services.loose_install_consolidator import (
     suggested_install_directory,
 )
 from app.services.paths import auto_extract_readme, auto_extract_tool_dir
+from app.ui.dialog_presenter import present_auxiliary_dialog
 from app.ui.dialogs.game_detail_dialog import launch_executable, reveal_in_explorer
 from app.workers.auto_extract_worker import AutoExtractFileTask, AutoExtractScanTask
 
@@ -71,8 +72,8 @@ DETAIL_DIR_FIELDS = {
 
 
 class AutoExtractDialog(QDialog):
-    def __init__(self, main: MainWindow) -> None:
-        super().__init__(main)
+    def __init__(self, main: MainWindow, parent: QWidget | None = None) -> None:
+        super().__init__(parent if parent is not None else main)
         self._main = main
         self.setWindowTitle("自动化解压工具")
         self.setMinimumSize(720, 640)
@@ -712,6 +713,12 @@ class AutoExtractDialog(QDialog):
         else:
             self._btn_scan.setText("开始扫描并解压")
 
+    def reject(self) -> None:
+        if self._running:
+            QMessageBox.information(self, "任务运行中", "请先停止或等待当前解压任务完成。")
+            return
+        super().reject()
+
     # ---------- single extract ----------
     def _browse_archive(self) -> None:
         start = self._dir_edits["watch"].text().strip()
@@ -727,8 +734,14 @@ class AutoExtractDialog(QDialog):
     def _open_password_manager(self) -> None:
         from app.ui.dialogs.password_manager_dialog import PasswordManagerDialog
 
-        dlg = PasswordManagerDialog(self)
-        dlg.exec()
+        try:
+            if getattr(self, "_pwd_dlg", None) is not None and self._pwd_dlg.isVisible():
+                present_auxiliary_dialog(self, self._pwd_dlg)
+                return
+            self._pwd_dlg = PasswordManagerDialog(self)
+            present_auxiliary_dialog(self, self._pwd_dlg)
+        except Exception as e:
+            QMessageBox.warning(self, "打开失败", str(e))
 
     def _run_single(self) -> None:
         if self._running:

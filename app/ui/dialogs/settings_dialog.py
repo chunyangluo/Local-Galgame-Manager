@@ -533,7 +533,12 @@ class SettingsDialog(QDialog):
         btn_fdm_detect.clicked.connect(self._auto_detect_fdm)
         fdm_row.addWidget(btn_fdm_detect)
         form.addRow("FDM 下载器:", fdm_row)
-        fdm_note = QLabel("Free Download Manager 可执行文件路径，留空则关闭 FDM 功能")
+        fdm_note = QLabel(
+            'Free Download Manager 可执行文件路径，留空则使用默认安装路径。'
+            ' <a href="https://www.freedownloadmanager.org/zh/">官方下载</a>'
+        )
+        fdm_note.setTextFormat(Qt.TextFormat.RichText)
+        fdm_note.setOpenExternalLinks(True)
         fdm_note.setStyleSheet("color:#93A1B6;font-size:11px;")
         form.addRow("", fdm_note)
 
@@ -976,28 +981,59 @@ class SettingsDialog(QDialog):
         return None
 
     def _open_hbe_decrypt(self) -> None:
+        from app.ui.dialog_presenter import exec_child_dialog
+        from app.ui.dialogs.hbe_decrypt_dialog import HbeDecryptDialog
+
         main = self._main_window()
         if main:
-            main._open_hbe_decrypt_dialog()
+            exec_child_dialog(self, HbeDecryptDialog(main, parent=self))
 
     def _open_auto_extract(self) -> None:
+        from app.ui.dialog_presenter import exec_child_dialog
+        from app.ui.dialogs.auto_extract_dialog import AutoExtractDialog
+
         main = self._main_window()
         if main:
-            main._open_auto_extract_dialog()
+            exec_child_dialog(self, AutoExtractDialog(main, parent=self))
 
     def _open_data_manager(self) -> None:
+        from app.ui.dialog_presenter import exec_child_dialog
+        from app.ui.dialogs.game_data_manager_dialog import GameDataManagerDialog
+
         main = self._main_window()
         if main:
-            main._open_game_data_manager()
+            exec_child_dialog(self, GameDataManagerDialog(main, parent=self))
 
     def _open_plugins(self) -> None:
+        from app.ui.dialog_presenter import exec_child_dialog
+        from app.ui.dialogs import PluginSettingsDialog
+
         main = self._main_window()
         if main:
-            main._open_plugin_settings()
+            main.plugin_manager.set_plugin_configs(main.db.get_plugin_configs())
+            main.plugin_manager.reload(disabled_plugins=main._disabled_plugins)
+            dialog = PluginSettingsDialog(
+                load_info=main.plugin_manager.load_info,
+                disabled_names=main._disabled_plugins,
+                plugin_dir=main.plugin_manager.plugin_dir,
+                plugin_manager=main.plugin_manager,
+                parent=self,
+            )
+            if exec_child_dialog(self, dialog) != QDialog.Accepted:
+                return
+            new_disabled = set(dialog.disabled_names())
+            if new_disabled == main._disabled_plugins:
+                return
+            main._disabled_plugins = new_disabled
+            main.db.set_disabled_plugins(sorted(main._disabled_plugins))
+            main.plugin_manager.set_plugin_configs(main.db.get_plugin_configs())
+            main.plugin_manager.reload(disabled_plugins=main._disabled_plugins)
 
     def _open_password_manager(self) -> None:
+        from app.ui.dialog_presenter import exec_child_dialog
         from app.ui.dialogs.password_manager_dialog import PasswordManagerDialog
-        PasswordManagerDialog(self).exec()
+
+        exec_child_dialog(self, PasswordManagerDialog(self))
 
     # ============================================================ 重置
 

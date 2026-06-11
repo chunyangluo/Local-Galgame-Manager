@@ -33,7 +33,8 @@ def resolve_fdm_exe(custom_path: str | None = None) -> Path:
 
     raise FdmNotFoundError(
         "未找到 Free Download Manager。\n"
-        "请安装 FDM 或在工具中指定 fdm.exe 路径。"
+        "请从官网下载安装：https://www.freedownloadmanager.org/zh/\n"
+        "或在「设置 → 工具路径」中指定 fdm.exe。"
     )
 
 
@@ -55,12 +56,14 @@ def add_download_task(url: str, *, custom_path: str | None = None) -> Path:
     return exe
 
 
-def _popen(cmd: list[str]) -> None:
+def _popen(cmd: list[str], *, show_window: bool = True) -> None:
     kwargs: dict = {}
     if sys.platform == "win32":
         startupinfo = subprocess.STARTUPINFO()
         startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-        startupinfo.wShowWindow = subprocess.SW_HIDE
+        # subprocess only exposes SW_HIDE; use Win32 SW_SHOWNORMAL (1) to show GUI.
+        startupinfo.wShowWindow = 1 if show_window else subprocess.SW_HIDE
         kwargs["startupinfo"] = startupinfo
-        kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
+        if not show_window:
+            kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
     subprocess.Popen(cmd, cwd=os.path.dirname(cmd[0]) or None, **kwargs)

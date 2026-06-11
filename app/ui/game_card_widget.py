@@ -108,6 +108,9 @@ class GameCardWidget(QWidget):
         self.favorite_badge = QLabel()
         self.favorite_badge.setObjectName("gameMeta")
         meta_row.addWidget(self.favorite_badge)
+        self.content_badge = QLabel()
+        self.content_badge.setObjectName("gameMeta")
+        meta_row.addWidget(self.content_badge)
         meta_row.addStretch(1)
         self.play_count = QLabel()
         self.play_count.setObjectName("gameMeta")
@@ -121,13 +124,20 @@ class GameCardWidget(QWidget):
     def update_meta(self, game: GameRecord) -> None:
         self._game = game
         count = int(game.play_count or 0)
-        self.play_count.setText(f"🎮 × {count}")
-        if count == 0:
-            self.play_count.setToolTip("游玩次数：0（尚未记录游玩）")
-        elif count == 1:
-            self.play_count.setToolTip("游玩次数：1 次")
+        is_video = getattr(game, "content_type", "game") == "video"
+        self.content_badge.setText("视频" if is_video else "")
+        self.content_badge.setToolTip("视频内容" if is_video else "")
+        self.content_badge.setVisible(is_video)
+        if is_video:
+            self.play_count.setText(f"▶ × {count}")
         else:
-            self.play_count.setToolTip(f"游玩次数：{count} 次")
+            self.play_count.setText(f"🎮 × {count}")
+        if count == 0:
+            self.play_count.setToolTip("打开次数：0（尚未打开）" if is_video else "游玩次数：0（尚未记录游玩）")
+        elif count == 1:
+            self.play_count.setToolTip("打开次数：1 次" if is_video else "游玩次数：1 次")
+        else:
+            self.play_count.setToolTip(f"打开次数：{count} 次" if is_video else f"游玩次数：{count} 次")
         if game.favorite:
             self.favorite_badge.setText("⭐")
             self.favorite_badge.setToolTip("已收藏（Ctrl+D 可切换）")

@@ -103,6 +103,37 @@ def unzip_safely_with_progress(
                 progress_cb(done, total, m.filename)
 
 
+def restore_zip_to_directory(
+    zip_path: Path,
+    dest_dir: Path,
+    *,
+    progress_cb: Callable[[int, int, str], None] | None = None,
+) -> None:
+    """Extract zip to a temp dir, then swap it into place so failures keep the old save dir."""
+    dest = dest_dir.resolve()
+    if not dest.is_dir():
+        raise FileNotFoundError(str(dest))
+    if dest.parent == dest:
+        raise ValueError("拒绝还原到磁盘根目录")
+
+    tmp = dest.parent / f".{dest.name}.restore_tmp"
+    rollback = dest.parent / f".{dest.name}.restore_rollback"
+    shutil.rmtree(tmp, ignore_errors=True)
+    shutil.rmtree(rollback, ignore_errors=True)
+
+    try:
+        unzip_safely_with_progress(zip_path, tmp, progress_cb=progress_cb)
+        dest.rename(rollback)
+        tmp.rename(dest)
+    except Exception:
+        if not dest.exists() and rollback.exists():
+            rollback.rename(dest)
+        raise
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+        shutil.rmtree(rollback, ignore_errors=True)
+
+
 def clear_directory_contents(d: Path) -> None:
     """Remove all children of ``d``; keep ``d`` itself."""
     root = d.resolve()

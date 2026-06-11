@@ -4,7 +4,7 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QPoint
+from PySide6.QtCore import QPoint, Qt
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QInputDialog, QMenu, QMessageBox
 
@@ -72,14 +72,21 @@ class GameActionMixin:
     def _fix_launch_exe_for_record(self, game: GameRecord) -> None:
         from PySide6.QtWidgets import QFileDialog
 
+        is_video = getattr(game, "content_type", "game") == "video"
+        title = "选择视频文件" if is_video else "选择启动程序"
+        file_filter = (
+            "Videos (*.mp4 *.mkv *.avi *.wmv *.flv *.mov *.webm *.m4v *.ts *.m2ts);;All (*.*)"
+            if is_video
+            else "Executable (*.exe)"
+        )
         file_path, _ = QFileDialog.getOpenFileName(
-            self, "选择启动程序", game.root_dir, "Executable (*.exe)"
+            self, title, game.root_dir, file_filter
         )
         if not file_path:
             return
         self.db.update_game_identity(game.id, game.name, file_path)
         self.refresh_games()
-        self.status.setText(f"已更新启动程序: {Path(file_path).name}")
+        self.status.setText(f"已更新{'视频文件' if is_video else '启动程序'}: {Path(file_path).name}")
 
     def _edit_game_identity(self) -> None:
         game = self._selected_game()
@@ -87,29 +94,34 @@ class GameActionMixin:
             return
         self.edit_game_identity_for_game_id(game.id)
 
-    def edit_game_identity_for_game_id(self, game_id: int) -> None:
+    def edit_game_identity_for_game_id(self, game_id: int, parent=None) -> None:
+        from PySide6.QtWidgets import QDialog, QWidget
+        from app.ui.dialog_presenter import exec_child_dialog
         from app.ui.dialogs import EditGameDialog
 
         game = self.db.get_game_by_id(self.current_user_id, game_id)
         if game is None:
-            QMessageBox.warning(self, "未找到游戏", "该游戏记录不存在。")
+            owner: QWidget = parent if parent is not None else self
+            QMessageBox.warning(owner, "未找到游戏", "该游戏记录不存在。")
             return
-        dialog = EditGameDialog(game, self)
-        if dialog.exec() != 1:
+        owner = parent if parent is not None else self
+        dialog = EditGameDialog(game, owner)
+        if exec_child_dialog(owner, dialog) != QDialog.DialogCode.Accepted:
             return
         new_name, new_launch_exe = dialog.values()
         if not new_name:
-            QMessageBox.warning(self, "输入无效", "游戏名不能为空。")
+            QMessageBox.warning(owner, "输入无效", "游戏名不能为空。")
             return
         if not new_launch_exe:
-            QMessageBox.warning(self, "输入无效", "启动路径不能为空。")
+            QMessageBox.warning(owner, "输入无效", "启动路径不能为空。")
             return
         if not Path(new_launch_exe).exists():
-            QMessageBox.warning(self, "路径无效", "启动路径不存在，请重新选择。")
+            label = "视频文件" if getattr(game, "content_type", "game") == "video" else "启动路径"
+            QMessageBox.warning(owner, "路径无效", f"{label}不存在，请重新选择。")
             return
         self.db.update_game_identity(game_id, new_name, new_launch_exe)
         self.refresh_games()
-        self.status.setText("已更新游戏名称与启动路径")
+        self.status.setText("已更新视频名称与文件路径" if getattr(game, "content_type", "game") == "video" else "已更新游戏名称与启动路径")
 
     def _create_category(self) -> None:
         text, ok = QInputDialog.getText(self, "新建分类", "分类名称")
@@ -153,6 +165,9 @@ class GameActionMixin:
         self._retry_cover_for_record(game)
 
     def _retry_cover_for_record(self, game: GameRecord) -> None:
+        if getattr(game, "content_type", "game") == "video":
+            self.status.setText("视频条目不参与在线封面重新获取，可手动设置封面")
+            return
         if self.retry_cover_for_game_id(game.id):
             self.status.setText("正在后台重新获取封面...")
 
@@ -163,6 +178,9 @@ class GameActionMixin:
         self._create_shortcut_for_record(game)
 
     def _create_shortcut_for_record(self, game: GameRecord) -> None:
+        if getattr(game, "content_type", "game") == "video":
+            self.status.setText("视频条目请通过系统播放器或文件关联打开")
+            return
         shortcut = self.system_service.create_desktop_shortcut(game.name, game.launch_exe)
         self.status.setText(f"快捷方式已创建: {shortcut}")
 
@@ -335,7 +353,11 @@ class GameActionMixin:
     def _open_quick_workflow(self) -> None:
         from app.ui.dialogs.quick_workflow_dialog import QuickWorkflowDialog
 
+        if getattr(self, "_scan_running", False) or getattr(self, "_vndb_worker", None) is not None:
+            QMessageBox.information(self, "任务运行中", "请等待当前扫描或导入任务完成后再启动一键工作流。")
+            return
         dlg = QuickWorkflowDialog(self, parent=self)
+        dlg.setWindowModality(Qt.WindowModal)
         dlg.exec()
 
     def _start_twodfan_crawl(self) -> None:
@@ -369,40 +391,48 @@ class GameActionMixin:
             return
         menu = QMenu(self)
         menu.setToolTipsVisible(True)
+        is_video = getattr(game, "content_type", "game") == "video"
 
         # ===== 第一组：启动操作（高频）=====
-        launch_action = menu.addAction("▶️ 启动游戏")
+        launch_action = menu.addAction("▶️ 播放视频" if is_video else "▶️ 启动游戏")
         launch_action.triggered.connect(
             lambda checked=False, gid=game.id: self.launch_game_by_id(gid, message_parent=self)
         )
-        launch_action.setToolTip("正常启动游戏")
+        launch_action.setToolTip("用系统默认播放器打开视频" if is_video else "正常启动游戏")
 
-        le_action = menu.addAction("🌐 LE 转区启动")
-        le_action.triggered.connect(
-            lambda checked=False, gid=game.id: self.launch_game_by_id(
-                gid, locale_emulator=True, message_parent=self
+        if is_video:
+            open_location_action = menu.addAction("📂 打开所在位置")
+            open_location_action.triggered.connect(
+                lambda checked=False, g=game: self._open_video_location(g)
             )
-        )
-        le_usable = self.is_locale_emulator_usable()
-        le_action.setEnabled(le_usable)
-        if not le_usable:
-            le_action.setToolTip("未配置 Locale Emulator，请在「更多」→「设置」中配置")
+            open_location_action.setToolTip("在资源管理器中打开视频所在位置")
         else:
-            le_action.setToolTip("通过 Locale Emulator 转区运行")
-
-        admin_action = menu.addAction("🛡️ 管理员启动")
-        admin_action.triggered.connect(
-            lambda checked=False, gid=game.id: self.launch_game_by_id(
-                gid, as_admin=True, message_parent=self
+            le_action = menu.addAction("🌐 LE 转区启动")
+            le_action.triggered.connect(
+                lambda checked=False, gid=game.id: self.launch_game_by_id(
+                    gid, locale_emulator=True, message_parent=self
+                )
             )
-        )
-        admin_action.setToolTip("以管理员权限启动")
+            le_usable = self.is_locale_emulator_usable()
+            le_action.setEnabled(le_usable)
+            if not le_usable:
+                le_action.setToolTip("未配置 Locale Emulator，请在「更多」→「设置」中配置")
+            else:
+                le_action.setToolTip("通过 Locale Emulator 转区运行")
 
-        debug_action = menu.addAction("🔧 调试启动")
-        debug_action.triggered.connect(
-            lambda checked=False, gid=game.id: self.debug_launch_game(gid, parent=self)
-        )
-        debug_action.setToolTip("测试游戏能否启动，显示详细诊断信息（退出码、运行时长、建议等）")
+            admin_action = menu.addAction("🛡️ 管理员启动")
+            admin_action.triggered.connect(
+                lambda checked=False, gid=game.id: self.launch_game_by_id(
+                    gid, as_admin=True, message_parent=self
+                )
+            )
+            admin_action.setToolTip("以管理员权限启动")
+
+            debug_action = menu.addAction("🔧 调试启动")
+            debug_action.triggered.connect(
+                lambda checked=False, gid=game.id: self.debug_launch_game(gid, parent=self)
+            )
+            debug_action.setToolTip("测试游戏能否启动，显示详细诊断信息（退出码、运行时长、建议等）")
 
         menu.addSeparator()
 
@@ -411,9 +441,10 @@ class GameActionMixin:
         detail_action.triggered.connect(lambda checked=False, gid=game.id: self.open_game_detail(gid))
         detail_action.setToolTip("查看游戏详细信息")
 
-        save_mgr_action = menu.addAction("💾 存档管理")
-        save_mgr_action.triggered.connect(lambda checked=False, gid=game.id: self.open_save_manager(gid))
-        save_mgr_action.setToolTip("管理游戏存档备份与还原")
+        if not is_video:
+            save_mgr_action = menu.addAction("💾 存档管理")
+            save_mgr_action.triggered.connect(lambda checked=False, gid=game.id: self.open_save_manager(gid))
+            save_mgr_action.setToolTip("管理游戏存档备份与还原")
 
         fav_text = "⭐ 取消收藏" if game.favorite else "☆ 收藏"
         fav_action = menu.addAction(fav_text)
@@ -435,21 +466,23 @@ class GameActionMixin:
             lambda checked=False, gid=game.id: self.edit_game_identity_for_game_id(gid)
         )
 
-        edit_title_action = edit_submenu.addAction("选择标题")
-        edit_title_action.triggered.connect(
-            lambda checked=False, gid=game.id: self.open_game_detail(gid)
-        )
-        edit_title_action.setToolTip("从候选标题中选择游戏名称")
+        if not is_video:
+            edit_title_action = edit_submenu.addAction("选择标题")
+            edit_title_action.triggered.connect(
+                lambda checked=False, gid=game.id: self.open_game_detail(gid)
+            )
+            edit_title_action.setToolTip("从候选标题中选择游戏名称")
 
         cover_action = edit_submenu.addAction("设置封面")
         cover_action.triggered.connect(
             lambda checked=False, gid=game.id: self.set_custom_cover_for_game_id(gid)
         )
 
-        retry_cover_action = edit_submenu.addAction("重新获取封面")
-        retry_cover_action.triggered.connect(
-            lambda checked=False, g=game: self._retry_cover_for_record(g)
-        )
+        if not is_video:
+            retry_cover_action = edit_submenu.addAction("重新获取封面")
+            retry_cover_action.triggered.connect(
+                lambda checked=False, g=game: self._retry_cover_for_record(g)
+            )
 
         assign_action = edit_submenu.addAction("分配分类")
         assign_action.triggered.connect(
@@ -459,11 +492,12 @@ class GameActionMixin:
         menu.addSeparator()
 
         # ===== 第四组：其他操作（低频）=====
-        shortcut_action = menu.addAction("🔗 创建桌面快捷方式")
-        shortcut_action.triggered.connect(
-            lambda checked=False, g=game: self._create_shortcut_for_record(g)
-        )
-        shortcut_action.setToolTip("在桌面创建游戏快捷方式")
+        if not is_video:
+            shortcut_action = menu.addAction("🔗 创建桌面快捷方式")
+            shortcut_action.triggered.connect(
+                lambda checked=False, g=game: self._create_shortcut_for_record(g)
+            )
+            shortcut_action.setToolTip("在桌面创建游戏快捷方式")
 
         menu.addSeparator()
 
@@ -474,6 +508,18 @@ class GameActionMixin:
         delete_action.setToolTip("从库中删除；可在确认框中勾选是否一并删除安装文件夹")
 
         menu.exec(menu_anchor if menu_anchor is not None else QCursor.pos())
+
+    def _open_video_location(self, game: GameRecord) -> None:
+        from PySide6.QtCore import QUrl
+        from PySide6.QtGui import QDesktopServices
+
+        path = Path(game.launch_exe)
+        target = path.parent if path.is_file() else Path(game.root_dir)
+        if not target.exists():
+            QMessageBox.warning(self, "无法打开", "视频文件或所在目录不存在。")
+            return
+        if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(target.resolve()))):
+            QMessageBox.warning(self, "无法打开", "系统未关联打开方式。")
 
     def _open_game_data_manager(self) -> None:
         from app.ui.dialogs.game_data_manager_dialog import GameDataManagerDialog

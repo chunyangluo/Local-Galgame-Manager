@@ -85,6 +85,15 @@ def _count_files(path: Path) -> int:
     return count
 
 
+def _is_unsafe_clear_dir(path: Path) -> bool:
+    try:
+        resolved = path.resolve()
+        home = Path.home().resolve()
+    except OSError:
+        return True
+    return resolved == home or resolved.parent == resolved
+
+
 class _ScanWorkerSignals(QObject):
     finished = Signal(dict)  # {dir_path: (size, file_count)}
 
@@ -108,10 +117,10 @@ class _ScanWorker(QThread):
 
 
 class GameDataManagerDialog(QDialog):
-    def __init__(self, main: MainWindow) -> None:
-        super().__init__(main)
+    def __init__(self, main: MainWindow, parent: QWidget | None = None) -> None:
+        super().__init__(parent if parent is not None else main)
         self._main = main
-        self.setWindowTitle("数据管理")
+        self.setWindowTitle("游戏数据管理")
         self.resize(920, 640)
         self._scan_worker = None
 
@@ -126,6 +135,22 @@ class GameDataManagerDialog(QDialog):
         close_box = QDialogButtonBox(QDialogButtonBox.Close)
         close_box.rejected.connect(self.reject)
         root.addWidget(close_box)
+
+    def _dir_scan_running(self) -> bool:
+        return self._scan_worker is not None and self._scan_worker.isRunning()
+
+    def reject(self) -> None:
+        if self._dir_scan_running():
+            QMessageBox.information(self, "扫描进行中", "请等待目录大小扫描完成后再关闭。")
+            return
+        super().reject()
+
+    def closeEvent(self, event) -> None:  # type: ignore[override]
+        if self._dir_scan_running():
+            QMessageBox.information(self, "扫描进行中", "请等待目录大小扫描完成后再关闭。")
+            event.ignore()
+            return
+        super().closeEvent(event)
 
     # ---- Database Tab ----
 
@@ -618,6 +643,21 @@ class GameDataManagerDialog(QDialog):
         except Exception as e:
             QMessageBox.warning(self, "无法打开", f"无法在资源管理器中打开:\n{e}")
 
+    def _is_protected_delete_path(self, path: Path) -> bool:
+        if _is_unsafe_clear_dir(path):
+            return True
+        try:
+            resolved = path.resolve()
+        except OSError:
+            return True
+        for _, managed_path in self._get_managed_directories():
+            try:
+                if resolved == managed_path.resolve():
+                    return True
+            except OSError:
+                continue
+        return False
+
     def _delete_selected_files(self) -> None:
         """Delete selected files/folders from the file tree."""
         items = self._file_tree.selectedItems()
@@ -640,6 +680,12 @@ class GameDataManagerDialog(QDialog):
 
         if not paths:
             QMessageBox.information(self, "未选择", "选中的项目不存在于磁盘上。")
+            return
+
+        protected = [p for p in paths if self._is_protected_delete_path(p)]
+        if protected:
+            names = "\n".join(f"  • {p}" for p in protected[:5])
+            QMessageBox.warning(self, "拒绝删除", f"选中项包含受保护目录，已拒绝删除：\n{names}")
             return
 
         # Calculate total size
@@ -767,6 +813,10 @@ class GameDataManagerDialog(QDialog):
         success = 0
         failed = 0
         errors: list[str] = []
+
+        if _is_unsafe_clear_dir(directory):
+            QMessageBox.warning(self, "清空失败", f"拒绝清空危险目录：\n{directory}")
+            return
 
         log.info("Clearing %s directory: %s", label, directory)
 

@@ -189,7 +189,7 @@ class PlayHistoryRowWidget(QWidget):
                 background: #3A4558;
             }
         """)
-        btn_detail.clicked.connect(lambda: self._main.open_game_detail(self._row.game_id))
+        btn_detail.clicked.connect(lambda: self._main.open_game_detail(self._row.game_id, parent=self))
         outer.addWidget(btn_detail, 0, Qt.AlignVCenter)
 
     def _dialog_parent(self) -> QWidget:

@@ -22,6 +22,11 @@ DISGUISED_EXTENSIONS: set[str] = {
     ".pdf", ".doc", ".docx",
 }
 
+VIDEO_EXTENSIONS: set[str] = {
+    ".mp4", ".mkv", ".avi", ".wmv", ".flv",
+    ".mov", ".webm", ".m4v", ".ts", ".m2ts",
+}
+
 ISO_SIGNATURE = (b"CD001", 0x8001, "iso")
 
 EXTENSION_MAP: dict[str, str] = {
@@ -125,7 +130,10 @@ def detect_disguised_archive(file_path: str | Path) -> Optional[str]:
         if file_size < 1024:
             return None
         with open(p, "rb") as f:
-            f.seek(-65536, 2)
+            if file_size > 65536:
+                f.seek(-65536, 2)
+            else:
+                f.seek(0)
             tail = f.read()
         if tail.rfind(b"PK\x05\x06") >= 0:
             return "zip"
@@ -136,6 +144,25 @@ def detect_disguised_archive(file_path: str | Path) -> Optional[str]:
     except OSError:
         pass
     return None
+
+
+def is_real_video_file(file_path: str | Path) -> bool:
+    """Return True only for video files that are not disguised archives."""
+    p = Path(file_path)
+    if p.suffix.lower() not in VIDEO_EXTENSIONS:
+        return False
+    return detect_archive_type(file_path) is None
+
+
+def classify_content_file(file_path: str | Path) -> str:
+    """Classify a file for extraction/import decisions."""
+    if is_download_temp_file(file_path):
+        return "download_temp"
+    if detect_archive_type(file_path) is not None:
+        return "archive"
+    if is_real_video_file(file_path):
+        return "video"
+    return "unknown"
 
 
 def detect_by_extension(file_path: str | Path) -> Optional[str]:

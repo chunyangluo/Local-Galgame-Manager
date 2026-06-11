@@ -4,7 +4,8 @@ import logging
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QThreadPool, Qt
+from PySide6.QtCore import QThreadPool, Qt, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import QApplication, QMessageBox
 
 from app.workers import LaunchGameTask
@@ -86,6 +87,21 @@ class LaunchMixin:
             return
 
         launch_exe = game.launch_exe
+        if getattr(game, "content_type", "game") == "video":
+            video_path = Path(launch_exe)
+            if not video_path.is_file():
+                QMessageBox.warning(parent, "视频文件不存在", f"视频文件不存在:\n{launch_exe}")
+                return
+            if not QDesktopServices.openUrl(QUrl.fromLocalFile(str(video_path.resolve()))):
+                QMessageBox.warning(parent, "无法打开视频", "系统未关联可用的视频播放器。")
+                return
+            try:
+                self.db.record_play(self.current_user_id, game.id, 0)
+            except Exception:
+                logging.getLogger(__name__).debug("Failed to record video open", exc_info=True)
+            self.refresh_games()
+            self.status.setText(f"已打开视频: {game.name}")
+            return
 
         # ---- 自动修复：如果 launch_exe 不存在，尝试搜索替代 exe ----
         if launch_exe and not Path(launch_exe).is_file():
@@ -358,6 +374,9 @@ class LaunchMixin:
         game = self.db.get_game_by_id(self.current_user_id, game_id)
         if game is None:
             QMessageBox.warning(msg_parent, "未找到游戏", "该游戏记录不存在。")
+            return
+        if getattr(game, "content_type", "game") == "video":
+            QMessageBox.information(msg_parent, "无需调试", "视频条目不使用游戏启动调试。")
             return
 
         launch_exe = game.launch_exe
